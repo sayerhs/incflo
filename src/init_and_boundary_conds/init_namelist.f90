@@ -26,42 +26,16 @@ MODULE INIT_NAMELIST_MODULE
       use bc
       use ic
       use constant, only: gravity
-      use fld_const, only: mu_g0, mw_avg
-      use fld_const, only: ro_g0
-      use fld_const, only: ro_g0, mu_g0, mw_avg
-      use ic, only: ic_p_g, ic_t_g, ic_t_s, ic_x_w
-      use ic, only: ic_u_g, ic_u_s, ic_v_g, ic_v_s, ic_w_g, ic_w_s
-      use ic, only: ic_x_e, ic_y_n, ic_y_s, ic_z_b, ic_z_t
-      use scales, only: p_ref, p_scale
-      use utilities, only: blank_line, line_too_big, seek_comment
+      use ic, only: ic_p, ic_t
+      use ic, only: ic_u, ic_v, ic_w
+      use ic, only: ic_x_e, ic_x_w, ic_y_n, ic_y_s, ic_z_b, ic_z_t
+      use utilities, only: blank_line, seek_comment
       use utilities, only: make_upper_case, replace_tab
 
       use param, only: zero, one
       use param, only: undefined, undefined_c
 
       implicit none
-
-!#####################################################################!
-!                           Physical Parameters                       !
-!#####################################################################!
-
-
-!<keyword category="Physical Parameters" required="false">
-!  <description>Reference pressure. [0.0]</description>
-      P_REF = ZERO
-!</keyword>
-
-!<keyword category="Physical Parameters" required="false">
-!  <description>Scale factor for pressure. [1.0]</description>
-      P_SCALE = ONE
-!</keyword>
-
-!<keyword category="Physical Parameters" required="false">
-!  <description>Gravity vector. [0.0, 9.80, 0.0] m/s^2 </description>
-      gravity(1) =  0.00000d0
-      gravity(2) = -9.80665d0
-      gravity(3) =  0.00000d0
-!</keyword>
 
 !#####################################################################!
 !                      Geometry and Discretization                    !
@@ -90,40 +64,6 @@ MODULE INIT_NAMELIST_MODULE
 !  </description>
       delp_z = zero
 !</keyword>
-
-
-!#####################################################################!
-!                               Gas Phase                             !
-!#####################################################################!
-
-!<keyword category="Gas Phase" required="false">
-!  <description>
-!    Specified constant gas density [g/cm^3 in CGS]. An equation of
-!    state -the ideal gas law by default- is used to calculate the gas
-!    density if this parameter is undefined. The value may be set to
-!    zero to make the drag zero and to simulate granular flow in a
-!    vacuum. For this case, users may turn off solving for gas momentum
-!    equations to accelerate convergence.
-!  </description>
-      RO_G0 = UNDEFINED
-!</keyword>
-
-!<keyword category="Gas Phase" required="false">
-!  <description>
-!    Specified constant gas viscosity [g/(cm.s) in CGS].
-!  </description>
-      MU_G0 = UNDEFINED
-!</keyword>
-
-!<keyword category="Gas Phase" required="false">
-!  <description>
-!    Average molecular weight of gas [(g/mol) in CGS]. Used in
-!    calculating the gas density for non-reacting flows when the gas
-!    composition is not defined.
-!  </description>
-      MW_AVG = UNDEFINED
-!</keyword>
-
 
 
 !#####################################################################!
@@ -174,59 +114,31 @@ MODULE INIT_NAMELIST_MODULE
 !    which varies only in the y-direction.
 !  </description>
 !  <arg index="1" id="IC" min="1" max="DIM_IC"/>
-      IC_P_G(:) = UNDEFINED
+      IC_P(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Initial Condition" required="false">
 !  <description>Initial gas phase temperature in the IC region.</description>
 !  <arg index="1" id="IC" min="1" max="DIM_IC"/>
-      IC_T_G(:) = 293.15d0
-!</keyword>
-
-!<keyword category="Initial Condition" required="false">
-!  <description>Initial solids phase-m temperature in the IC region.</description>
-!  <arg index="1" id="IC" min="1" max="DIM_IC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      IC_T_S(:,:) = UNDEFINED
+      IC_T(:) = 293.15d0
 !</keyword>
 
 !<keyword category="Initial Condition" required="false">
 !  <description>Initial x-component of gas velocity in the IC region.</description>
 !  <arg index="1" id="IC" min="1" max="DIM_IC"/>
-      IC_U_G(:) = UNDEFINED
-!</keyword>
-
-!<keyword category="Initial Condition" required="false">
-!  <description>Initial x-component of solids-phase velocity in the IC region.</description>
-!  <arg index="1" id="IC" min="1" max="DIM_IC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      IC_U_S(:,:) = UNDEFINED
+      IC_U(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Initial Condition" required="false">
 !  <description>Initial y-component of gas velocity in the IC region.</description>
 !  <arg index="1" id="IC" min="1" max="DIM_IC"/>
-      IC_V_G(:) = UNDEFINED
-!</keyword>
-
-!<keyword category="Initial Condition" required="false">
-!  <description>Initial y-component of solids-phase velocity in the IC region.</description>
-!  <arg index="1" id="IC" min="1" max="DIM_IC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      IC_V_S(:,:) = UNDEFINED
+      IC_V(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Initial Condition" required="false">
 !  <description>Initial z-component of gas velocity in the IC region.</description>
 !  <arg index="1" id="IC" min="1" max="DIM_IC"/>
-      IC_W_G(:) = UNDEFINED
-!</keyword>
-
-!<keyword category="Initial Condition" required="false">
-!  <description>Initial z-component of solids-phase velocity in the IC region.</description>
-!  <arg index="1" id="IC" min="1" max="DIM_IC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      IC_W_S(:,:) = UNDEFINED
+      IC_W(:) = UNDEFINED
 !</keyword>
 
 !#####################################################################!
@@ -330,183 +242,95 @@ MODULE INIT_NAMELIST_MODULE
 !<keyword category="Boundary Condition" required="false">
 !  <description>Gas phase hw for partial slip boundary.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_HW_G(:) = UNDEFINED
+      BC_HW(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>Gas phase Uw for partial slip boundary.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_UW_G(:) = UNDEFINED
+      BC_UW(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>Gas phase Vw for partial slip boundary.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_VW_G(:) = UNDEFINED
+      BC_VW(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>Gas phase Ww for partial slip boundary.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_WW_G(:) = UNDEFINED
+      BC_WW(:) = UNDEFINED
 !</keyword>
 
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>
 !    Gas phase heat transfer coefficient, Hw, in diffusion boundary condition:
-!    d(T_g)/dn + Hw (T_g - Tw_g) = C, where n is the fluid-to-wall normal.
+!    d(T)/dn + Hw (T - Tw) = C, where n is the fluid-to-wall normal.
 !  </description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_HW_T_G(:) = UNDEFINED
+      BC_HW_T(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>
-!    Specified gas phase wall temperature, Tw_g, in diffusion boundary condition:
-!    d(T_g)/dn + Hw (T_g - Tw_g) = C, where n is the fluid-to-wall normal.
+!    Specified gas phase wall temperature, Tw, in diffusion boundary condition:
+!    d(T)/dn + Hw (T - Tw) = C, where n is the fluid-to-wall normal.
 !  </description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_TW_G(:) = UNDEFINED
+      BC_TW(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>
 !    Specified constant gas phase heat flux, C, in diffusion boundary condition:
-!    d(T_g)/dn + Hw (T_g - Tw_g) = C, where n is the fluid-to-wall normal.
+!    d(T)/dn + Hw (T - Tw) = C, where n is the fluid-to-wall normal.
 !  </description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_C_T_G(:) = UNDEFINED
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>
-!    Gas phase species mass transfer coefficient, Hw, in diffusion boundary condition:
-!    d(X_g)/dn + Hw (X_g - Xw_g) = C, where n is the fluid-to-wall normal.
-!  </description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Species" min="1" max="DIM_N_G"/>
-      BC_HW_X_G(:,:) = UNDEFINED
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>
-!    Specified wall gas species mass fraction, Xw, in diffusion boundary condition:
-!    d(X_g)/dn + Hw (X_g - Xw_g) = C, where n is the fluid-to-wall normal.
-!  </description>
-!  <description>Gas phase Xw for mass transfer.</description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Species" min="1" max="DIM_N_G"/>
-      BC_XW_G(:,:) = UNDEFINED
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>
-!    Specified constant gas species mass flux, C, in diffusion boundary condition:
-!    d(X_g)/dn + Hw (X_g - Xw_g) = C, where n is the fluid-to-wall normal.
-!  </description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Species" min="1" max="DIM_N_G"/>
-      BC_C_X_G(:,:) = UNDEFINED
+      BC_C_T(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>Gas pressure at the BC plane.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_P_G(:) = UNDEFINED
+      BC_P(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>Gas phase temperature at the BC plane.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_T_G(:) = 293.15d0
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>Solids phase-m temperature at the BC plane.</description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      BC_T_S(:,:) = 293.15d0
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>Mass fraction of gas species at the BC plane.</description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Species" min="1" max="DIM_N_G"/>
-      BC_X_G(:,:) = UNDEFINED
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>Mass fraction of solids species at the BC plane.</description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-!  <arg index="3" id="Species" min="1" max="DIM_N_S"/>
-      BC_X_S(:,:,:) = UNDEFINED
+      BC_T(:) = 293.15d0
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>X-component of gas velocity at the BC plane.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_U_G(:) = ZERO
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>X-component of solids-phase velocity at the BC plane.</description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      BC_U_S(:,:) = ZERO
+      BC_U(:) = ZERO
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>Y-component of gas velocity at the BC plane.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_V_G(:) = ZERO
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>Y-component of solids-phase velocity at the BC plane.</description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      BC_V_S(:,:) = ZERO
+      BC_V(:) = ZERO
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>Z-component of gas velocity at the BC plane.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_W_G(:) = ZERO
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>Z-component of solids-phase velocity at the BC plane.</description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      BC_W_S(:,:) = ZERO
+      BC_W(:) = ZERO
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>Gas volumetric flow rate through the boundary.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_VOLFLOW_G(:) = UNDEFINED
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>Solids volumetric flow rate through the boundary.</description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      BC_VOLFLOW_S(:,:) = UNDEFINED
+      BC_VOLFLOW(:) = UNDEFINED
 !</keyword>
 
 !<keyword category="Boundary Condition" required="false">
 !  <description>Gas mass flow rate through the boundary.</description>
 !  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-      BC_MASSFLOW_G(:) = UNDEFINED
-!</keyword>
-
-!<keyword category="Boundary Condition" required="false">
-!  <description>Solids mass flow rate through the boundary.</description>
-!  <arg index="1" id="BC" min="1" max="DIM_BC"/>
-!  <arg index="2" id="Phase" min="1" max="DIM_M"/>
-      BC_MASSFLOW_S(:,:) = UNDEFINED
+      BC_MASSFLOW(:) = UNDEFINED
 !</keyword>
 
       end subroutine init_namelist

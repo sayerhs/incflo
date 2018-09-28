@@ -75,7 +75,10 @@ private:
 	std::array<amrex::LinOpBCType, AMREX_SPACEDIM> m_lobc;
 	std::array<amrex::LinOpBCType, AMREX_SPACEDIM> m_hibc;
 
-	bool verbose = true;
+	bool verbose = false;
+
+    // What solver to use as the bottom solver in the MLMG solves.
+    std::string bottom_solver_type;
 
 	int m_mg_verbose = 0;
 	amrex::Real m_mg_rtol = 1.0e-11;

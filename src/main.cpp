@@ -6,9 +6,9 @@
 #include <AMReX_VisMF.H>
 #include <AMReX_iMultiFab.H>
 
-#include <incflo_F.H>
-#include <incflo_io_F.H>
+#include <incflo_derive_F.H>
 #include <incflo_icbc_F.H>
+#include <incflo_io_F.H>
 #include <incflo_level.H>
 
 // Declare and initialise variables
@@ -17,10 +17,6 @@ int verbose = -1;
 int regrid_int = -1;
 Real stop_time = -1.0;
 bool steady_state = false;
-
-Real mu_g0 = 0.0;
-Real ro_g0 = 1.0;
-Vector<Real> gravity(3, 0.);
 
 bool write_eb_surface = false;
 std::string restart_file{""};
@@ -43,15 +39,15 @@ void ReadParameters();
 
 int main(int argc, char* argv[])
 {
-	// Issue an error if AMR input file is not given
-	if(argc < 2)
-		amrex::Abort("AMReX input file missing");
-
 	// AMReX will now read the inputs file and the command line arguments, but the
 	//        command line arguments are in incflo-format so it will just ignore them.
 	amrex::Initialize(argc, argv);
 	BL_PROFILE_VAR("main()", pmain)
 	BL_PROFILE_REGION_START("incflo::main()");
+
+	// Issue an error if AMR input file is not given
+	if(argc < 2)
+		amrex::Abort("AMReX input file missing");
 
 	// Setting format to NATIVE rather than default of NATIVE_32
 	FArrayBox::setFormat(FABio::FAB_NATIVE);
@@ -78,10 +74,6 @@ int main(int argc, char* argv[])
     // Time and time step counters
 	Real time = 0.0L;
 	int nstep = 0; 
-
-    // Loads the parameters from the `incflo.dat` file:
-    // get_data();
-    incflo_get_data(&ro_g0, &mu_g0, gravity.dataPtr()); 
 
 	// Default AMR level = 0
 	int lev = 0;
@@ -121,12 +113,10 @@ int main(int argc, char* argv[])
 	}
 
 
-	if(incflo_level::get_load_balance_type() == "FixedSize" ||
-	   incflo_level::get_load_balance_type() == "KnapSack")
-		my_incflo.Regrid(lev, 0);
-
-	// This checks if we want to regrid using the KDTree or KnapSack approach
-	my_incflo.Regrid(lev, nstep);
+	// Regrid
+    if(verbose)
+        amrex::Print() << "Regridding at step " << nstep << std::endl; 
+	my_incflo.Regrid(lev);
 
     // Post-initialisation step
 	my_incflo.PostInit(lev, dt, time, nstep, restart_flag, stop_time, steady_state);
@@ -138,8 +128,7 @@ int main(int argc, char* argv[])
 	Real end_init = ParallelDescriptor::second() - strt_time;
 	ParallelDescriptor::ReduceRealMax(end_init, ParallelDescriptor::IOProcessorNumber());
 
-	if(ParallelDescriptor::IOProcessor())
-		std::cout << "Time spent in init      " << end_init << std::endl;
+    amrex::Print() << "Time spent in init      " << end_init << std::endl;
 
 	int finish = 0;
 
@@ -178,15 +167,18 @@ int main(int argc, char* argv[])
 				Real strt_step = ParallelDescriptor::second();
 
 				if(!steady_state && regrid_int > -1 && nstep % regrid_int == 0)
-					my_incflo.Regrid(lev, nstep);
+                {
+                    if(verbose)
+                        amrex::Print() << "Regridding at step " << nstep << std::endl; 
+                    my_incflo.Regrid(lev);
+                }
 
 				my_incflo.Advance(lev, nstep, steady_state, dt, prev_dt, time, stop_time);
 
 				Real end_step = ParallelDescriptor::second() - strt_step;
 				ParallelDescriptor::ReduceRealMax(end_step,
 												  ParallelDescriptor::IOProcessorNumber());
-				if(ParallelDescriptor::IOProcessor())
-					std::cout << "Time per step        " << end_step << std::endl;
+			    amrex::Print() << "Time per step " << end_step << std::endl;
 
 				if(!steady_state)
 				{
@@ -224,16 +216,16 @@ int main(int argc, char* argv[])
 	if(check_int > 0 && nstep != last_chk)
 		my_incflo.WriteCheckPointFile(check_file, nstep, dt, time);
 	if(plot_int > 0 && nstep != last_plt)
+    {
+        my_incflo.incflo_compute_vort(lev);
 		my_incflo.WritePlotFile(plot_file, nstep, dt, time);
+    }
 
 	Real end_time = ParallelDescriptor::second() - strt_time;
 	ParallelDescriptor::ReduceRealMax(end_time, ParallelDescriptor::IOProcessorNumber());
 
-	if(ParallelDescriptor::IOProcessor())
-	{
-		std::cout << "Time spent in main      " << end_time << std::endl;
-		std::cout << "Time spent in main-init " << end_time - end_init << std::endl;
-	}
+    amrex::Print() << "Time spent in main      " << end_time << std::endl;
+    amrex::Print() << "Time spent in main-init " << end_time - end_init << std::endl;
 
 	BL_PROFILE_REGION_STOP("incflo::main()");
 	BL_PROFILE_VAR_STOP(pmain);
@@ -261,6 +253,7 @@ void ReadParameters()
 		pp.query("plot_int", plot_int);
 
 		pp.query("plotfile_on_restart", plotfile_on_restart);
+		pp.query("write_eb_surface", write_eb_surface);
 
 		pp.query("restart", restart_file);
 		pp.query("repl_x", repl_x);
@@ -268,16 +261,6 @@ void ReadParameters()
 		pp.query("repl_z", repl_z);
 		pp.query("verbose", verbose);
 		pp.query("regrid_int", regrid_int);
-	}
-
-	{
-		ParmParse pp("incflo");
-
-		pp.query("write_eb_surface", write_eb_surface);
-
-		pp.query("mu_g0", mu_g0);
-		pp.query("ro_g0", ro_g0);
-		pp.queryarr("gravity", gravity, 0, 3);
 	}
 }
 

@@ -10,18 +10,12 @@ module param
   integer, parameter :: dim_bc = 500
   ! Maximum number of items for specifying point sources
   integer, parameter :: dim_ps = 5000
-  ! Maximum number of solids phases
-  integer, parameter :: dim_m = 10
-  ! Maximum number of gas species
-  integer, parameter :: dim_n_g = 100
-  ! Maximum number of solids species per phase.
-  integer, parameter :: dim_n_s = 100
 
   ! Number of Equation types:
-  !  1) Gas pressure
-  !  2) Gas and solids U-Momentum equation
-  !  3) Gas and solids V-Momentum equation
-  !  4) Gas and solids W-Momentum equation
+  !  1) pressure
+  !  2) U-Momentum equation
+  !  3) V-Momentum equation
+  !  4) W-Momentum equation
   integer, parameter :: dim_eqs = 4
 
 ! Parameters describing problem size: (set from user input)
@@ -35,6 +29,8 @@ module param
 ! Cutoffs for large and small numbers
       real(rt), parameter :: large_number = 1.0d32
       real(rt), parameter :: small_number = 1.0d-15
+
+      real(rt), parameter :: my_huge  = 1.0d20
 
 ! Common parameter constants
       real(rt), parameter :: zero = 0.0d0

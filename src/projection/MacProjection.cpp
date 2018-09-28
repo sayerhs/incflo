@@ -4,7 +4,6 @@
 #include <AMReX_MultiFabUtil.H>
 #include <AMReX_ParmParse.H>
 #include <MacProjection.H>
-#include <incflo_F.H>
 #include <incflo_icbc_F.H>
 #include <incflo_mac_F.H>
 #include <incflo_proj_F.H>
@@ -22,7 +21,7 @@ IntVect MacProjection::e_z(0, 0, 1);
 //
 MacProjection::MacProjection(AmrCore* a_amrcore,
 							 int a_nghost,
-							 amrex::Vector<std::unique_ptr<amrex::EBFArrayBoxFactory>>* a_ebfactory)
+							 Vector<std::unique_ptr<EBFArrayBoxFactory>>* a_ebfactory)
 {
 	m_amrcore = a_amrcore;
 	m_nghost = a_nghost;
@@ -45,10 +44,14 @@ void MacProjection::read_inputs()
 {
 	ParmParse pp("mac");
 
-	// Option to control MGML behavior
+	// Option to control MLMG behavior
 	pp.query("verbose", verbose);
 	pp.query("mg_verbose", m_mg_verbose);
 	pp.query("mg_rtol", m_mg_rtol);
+
+   // Default bottom solver is bicgstab, but alternatives are "smoother" or "hypre"
+   bottom_solver_type = "bicgstab";
+   pp.query( "bottom_solver_type",  bottom_solver_type );
 }
 
 //
@@ -224,6 +227,10 @@ void MacProjection::apply_projection(Vector<std::unique_ptr<MultiFab>>& u,
 
 		if(verbose)
 		{
+            // Fill boundaries before printing div(u) 
+            for(int i = 0; i < 3; i++)
+                (vel[lev])[i]->FillBoundary(m_amrcore->Geom(lev).periodicity());
+
 			EB_computeDivergence(*m_diveu[lev], GetArrOfConstPtrs(vel[lev]), m_amrcore->Geom(lev));
 
 			Print() << "  * On level " << lev << " max(abs(diveu)) = " << norm0(m_diveu, lev)
@@ -239,6 +246,20 @@ void MacProjection::apply_projection(Vector<std::unique_ptr<MultiFab>>& u,
 	macproj.setDomainBC(m_lobc, m_hibc);
 	macproj.setVerbose(m_mg_verbose);
 
+   // The default bottom solver is BiCG
+   // Other options include:
+   ///   Hypre IJ AMG solver
+   //    macproj.getMLMG().setBottomSolver(MLMG::BottomSolver::hypre);
+   ///   regular smoothing
+   //    macproj.getMLMG().setBottomSolver(MLMG::BottomSolver::smoother);
+
+   if (bottom_solver_type == "smoother")
+   {
+      macproj.setBottomSolver(MLMG::BottomSolver::smoother);
+   } else if (bottom_solver_type == "hypre") {
+      macproj.setBottomSolver(MLMG::BottomSolver::hypre);
+   }
+
 	macproj.project(m_mg_rtol);
 
 	if(verbose)
@@ -246,16 +267,20 @@ void MacProjection::apply_projection(Vector<std::unique_ptr<MultiFab>>& u,
 
 	for(int lev = 0; lev <= m_amrcore->finestLevel(); ++lev)
 	{
-		// Set velocity bcs
-		set_velocity_bcs(lev, u, v, w);
-
 		if(verbose)
 		{
+            // Fill boundaries before printing div(u) 
+            for(int i = 0; i < 3; i++)
+                (vel[lev])[i]->FillBoundary(m_amrcore->Geom(lev).periodicity());
+
 			EB_computeDivergence(*m_diveu[lev], GetArrOfConstPtrs(vel[lev]), m_amrcore->Geom(lev));
 
 			Print() << "  * On level " << lev << " max(abs(diveu)) = " << norm0(m_diveu, lev)
 					<< "\n";
 		}
+        
+		// Set velocity bcs
+		set_velocity_bcs(lev, u, v, w);
 	}
 }
 
@@ -381,7 +406,7 @@ void MacProjection::compute_b_coeff(const Vector<std::unique_ptr<MultiFab>>& u,
 		const EBFArrayBox& div_fab = dynamic_cast<EBFArrayBox const&>((*m_diveu[lev])[mfi]);
 		const EBCellFlagFab& flags = div_fab.getEBCellFlagFab();
 
-		if(flags.getType(amrex::grow(bx, 0)) == FabType::covered)
+		if(flags.getType(grow(bx, 0)) == FabType::covered)
 		{
 			m_b[lev][0]->setVal(1.2345e300, ubx, 0, 1);
 			m_b[lev][1]->setVal(1.2345e300, vbx, 0, 1);

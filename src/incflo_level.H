@@ -11,18 +11,15 @@
 #include <AMReX_AmrCore.H>
 #include <AMReX_BLProfiler.H>
 #include <AMReX_iMultiFab.H>
-
 #include <AMReX_EBFabFactory.H>
-
 #include <AMReX_EBFArrayBox.H>
-
 #include <AMReX_EB2.H>
 #include <AMReX_EB2_IF_Intersection.H>
 #include <AMReX_EB2_IF_Plane.H>
 #include <AMReX_EB2_IF_Polynomial.H>
 #include <AMReX_EB2_IF_Translation.H>
-#include <incflo_eb_if.H>
 
+#include <incflo_eb_if.H>
 #include <MacProjection.H>
 
 class incflo_level : public AmrCore
@@ -57,7 +54,7 @@ public:
 
 	void Restart(std::string& restart_chkfile, int* nstep, Real* dt, Real* time, IntVect& Nrep);
 
-	void Regrid(int lev, int nstep);
+	void Regrid(int lev);
 
 	void Advance(
 		int lev, int nstep, int steady_state, Real& dt, Real& prev_dt, Real time, Real stop_time);
@@ -139,13 +136,13 @@ protected:
 	void incflo_set_pressure_bcs(int lev);
 
 	void AllocateArrays(int lev);
-	void AllocateTempArrays(int lev);
-	void RegridArrays(int lev, BoxArray& new_grids, DistributionMapping& new_dmap);
+	void RegridArrays(int lev);
 
 	void MakeBCArrays();
 
 private:
 	void make_eb_general(int lev);
+	void make_eb_annulus(int lev);
 	void make_eb_box(int lev);
 	void make_eb_cylinder(int lev);
 	void make_eb_hopper(int lev);
@@ -153,8 +150,6 @@ private:
 	void make_eb_clr(int lev);
 	void make_eb_clr_riser(int lev);
 	void make_eb_regular(int lev);
-
-	void check_data(int lev);
 
 	void MakeNewLevelFromScratch(int lev,
 								 Real time,
@@ -257,6 +252,9 @@ private:
 	Real incflo_norm0(const Vector<std::unique_ptr<MultiFab>>& mf, int lev, int comp);
 	Real incflo_norm0(MultiFab& mf, int lev, int comp);
 
+   void incflo_average_cc_to_fc ( int lev, const MultiFab& cc,
+                                 Array<std::unique_ptr<MultiFab>,AMREX_SPACEDIM>& fc );
+   
 	Vector<int> istep = {1};
 
 	// Unit vectors in Cartesian space
@@ -274,33 +272,33 @@ private:
 	Vector<std::unique_ptr<iMultiFab>> flag;
 
 	// Gas pressure fraction
-	Vector<std::unique_ptr<MultiFab>> p_g;
-	Vector<std::unique_ptr<MultiFab>> p_go;
+	Vector<std::unique_ptr<MultiFab>> p;
+	Vector<std::unique_ptr<MultiFab>> p_o;
 
 	// Gas density
-	Vector<std::unique_ptr<MultiFab>> ro_g;
-	Vector<std::unique_ptr<MultiFab>> ro_go;
+	Vector<std::unique_ptr<MultiFab>> ro;
+	Vector<std::unique_ptr<MultiFab>> ro_o;
 
 	// Gas velocity
-	Vector<std::unique_ptr<MultiFab>> vel_g;
-	Vector<std::unique_ptr<MultiFab>> vel_go;
+	Vector<std::unique_ptr<MultiFab>> vel;
+	Vector<std::unique_ptr<MultiFab>> vel_o;
 
 	// Base state pressure
-	Vector<std::unique_ptr<MultiFab>> p0_g;
+	Vector<std::unique_ptr<MultiFab>> p0;
 
 	// Pressure correction
-	Vector<std::unique_ptr<MultiFab>> pp_g;
+	Vector<std::unique_ptr<MultiFab>> pp;
 
 	// Pressure gradients
 	Vector<std::unique_ptr<MultiFab>> gp;
 	Vector<std::unique_ptr<MultiFab>> gp0;
 
 	// Molecular viscosity
-	Vector<std::unique_ptr<MultiFab>> mu_g;
+	Vector<std::unique_ptr<MultiFab>> mu;
 
 	// Cell-based
-	Vector<std::unique_ptr<MultiFab>> lambda_g;
-	Vector<std::unique_ptr<MultiFab>> trD_g;
+	Vector<std::unique_ptr<MultiFab>> lambda;
+	Vector<std::unique_ptr<MultiFab>> trD;
 	Vector<std::unique_ptr<MultiFab>> vort;
 
 	// These are multi-component multifabs
@@ -340,8 +338,19 @@ private:
 	// MAC projection object
 	std::unique_ptr<MacProjection> mac_projection;
 
+    // What solver to use as the bottom solver in the MLMG solves.
+    std::string bottom_solver_type;
+
 	// used if load_balance_type == "KnapSack"
 	Vector<std::unique_ptr<MultiFab>> fluid_cost;
+
+    // Be verbose? 
+    int verbose = 0;
+
+    // Physics 
+    static Vector<Real> gravity;
+    Real ro_0 = 1.0;
+    Real mu_0 = 1.0;
 
 	// Options to control MLMG behavior
 	int mg_verbose = 0;
@@ -362,9 +371,6 @@ private:
 	Real cfl = 0.5;
 	Real fixed_dt = -1.;
 
-	static int m_eb_basic_grow_cells;
-	static int m_eb_volume_grow_cells;
-	static int m_eb_full_grow_cells;
 	static EBSupport m_eb_support_level;
 
 	Periodicity p0_periodicity;
@@ -378,7 +384,12 @@ private:
 	//
 
 	// These values are required when fluid sees EB -- for now
-	const int nghost = 4;
+	const int nghost = 5;
+
+	const int m_eb_basic_grow_cells = nghost;
+	const int m_eb_volume_grow_cells = nghost;
+	const int m_eb_full_grow_cells = nghost;
+
 	int nodal_pressure = 0;
 	int explicit_diffusion = 1;
 
@@ -404,6 +415,8 @@ private:
 
 	Vector<std::unique_ptr<amrex::EBFArrayBoxFactory>> ebfactory;
 	std::unique_ptr<MultiFab> dummy;
+
+    void incflo_update_ebfactory(int a_lev);
 };
 
 inline std::string incflo_level::get_load_balance_type()

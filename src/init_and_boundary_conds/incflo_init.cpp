@@ -2,21 +2,33 @@
 
 #include <AMReX_BC_TYPES.H>
 #include <AMReX_Box.H>
-#include <incflo_F.H>
 #include <incflo_eb_F.H>
 #include <incflo_icbc_F.H>
 #include <incflo_level.H>
-
-using namespace std;
 
 void incflo_level::InitParams()
 {
 	{
 		ParmParse pp("incflo");
 
+        // Verbosity
+        pp.query("verbose", verbose);
+
+        // Initial density
+		pp.queryarr("gravity", gravity, 0, 3);
+
+        pp.query("ro_0", ro_0);
+        AMREX_ASSERT(ro_0 >= 0.0);
+
+        pp.query("mu_0", mu_0);
+        AMREX_ASSERT(mu_0 >= 0.0);
+
 		// Options to control time stepping
 		pp.query("cfl", cfl);
 		pp.query("fixed_dt", fixed_dt);
+
+		// Tolerance to check for steady state
+		pp.query("steady_state_tol", steady_state_tol);
 
 		// Option to control MGML behavior
 		pp.query("mg_verbose", mg_verbose);
@@ -27,8 +39,9 @@ void incflo_level::InitParams()
 		pp.query("mg_rtol", mg_rtol);
 		pp.query("mg_atol", mg_atol);
 
-		// Tolerance to check for steady state (projection only)
-		pp.query("steady_state_tol", steady_state_tol);
+        // Default bottom solver is bicgstab, but alternatives are "smoother" or "hypre"
+        bottom_solver_type = "bicgstab";
+        pp.query( "bottom_solver_type",  bottom_solver_type );
 
 		// Should we use explicit vs implicit diffusion
 		pp.query("explicit_diffusion", explicit_diffusion);
@@ -42,9 +55,11 @@ void incflo_level::InitParams()
 		pp.query("load_balance_type", load_balance_type);
 		pp.query("knapsack_weight_type", knapsack_weight_type);
 
-		AMREX_ALWAYS_ASSERT(load_balance_type == "FixedSize" || load_balance_type == "KnapSack");
-
-		AMREX_ALWAYS_ASSERT(knapsack_weight_type == "RunTimeCosts");
+		AMREX_ASSERT(load_balance_type == "FixedSize" || load_balance_type == "KnapSack");
+		AMREX_ASSERT(knapsack_weight_type == "RunTimeCosts");
+        
+        // Loads constants given at runtime `inputs` file into the Fortran module "constant"
+        incflo_get_data(gravity.dataPtr(), &ro_0, &mu_0); 
 	}
 }
 
@@ -75,7 +90,7 @@ void incflo_level::Init(int lev, Real time)
 	incflo_set_bc_type(lev);
 
 	// Allocate container for eb-normals
-	dummy = unique_ptr<MultiFab>(new MultiFab);
+	dummy = std::unique_ptr<MultiFab>(new MultiFab);
 
 	// Create MAC projection object
 	mac_projection.reset(new MacProjection(this, nghost, &ebfactory));
@@ -165,8 +180,6 @@ void incflo_level::MakeNewLevelFromScratch(int lev,
 	SetDistributionMap(lev, new_dmap);
 
 	MakeBCArrays();
-
-	check_data(lev);
 }
 
 void incflo_level::ReMakeNewLevelFromScratch(int lev,
@@ -178,27 +191,8 @@ void incflo_level::ReMakeNewLevelFromScratch(int lev,
 
 	MakeBCArrays();
 
-	check_data(lev);
-
 	// We need to re-fill these arrays for the larger domain (after replication).
 	incflo_set_bc_type(lev);
-}
-
-void incflo_level::check_data(int lev)
-{
-
-	Real dx = geom[lev].CellSize(0);
-	Real dy = geom[lev].CellSize(1);
-	Real dz = geom[lev].CellSize(2);
-
-	Real xlen = geom[lev].ProbHi(0) - geom[lev].ProbLo(0);
-	Real ylen = geom[lev].ProbHi(1) - geom[lev].ProbLo(1);
-	Real zlen = geom[lev].ProbHi(2) - geom[lev].ProbLo(2);
-
-	Box domain(geom[0].Domain());
-
-	// Convert (mass, volume) flows to velocities.
-	set_bc_flow(&xlen, &ylen, &zlen, &dx, &dy, &dz);
 }
 
 void incflo_level::InitLevelData(int lev, Real time)
@@ -214,11 +208,8 @@ void incflo_level::InitLevelData(int lev, Real time)
 void incflo_level::PostInit(
 	int lev, Real& dt, Real time, int nstep, int restart_flag, Real stop_time, int steady_state)
 {
-	// Allocate the temporaries for the fluid evolution
-	AllocateTempArrays(lev);
-
-	// Initial fluid arrays: pressure, velocity, density, viscosity
-	incflo_init_fluid(lev, restart_flag, time, dt, stop_time, steady_state);
+    // Initial fluid arrays: pressure, velocity, density, viscosity
+    incflo_init_fluid(lev, restart_flag, time, dt, stop_time, steady_state);
 }
 
 void incflo_level::MakeBCArrays()
@@ -251,8 +242,8 @@ void incflo_level::MakeBCArrays()
 	bc_khi.resize(box_khi, 2);
 }
 
-void incflo_level::incflo_init_fluid(
-	int lev, int is_restarting, Real time, Real& dt, Real stop_time, int steady_state)
+void incflo_level::incflo_init_fluid(int lev, int is_restarting, Real time, Real& dt, 
+                                     Real stop_time, int steady_state)
 {
 	Box domain(geom[lev].Domain());
 
@@ -269,11 +260,11 @@ void incflo_level::incflo_init_fluid(
 
 	// We deliberately don't tile this loop since we will be looping
 	//    over bc's on faces and it makes more sense to do this one grid at a time
-	for(MFIter mfi(*ro_g[lev], false); mfi.isValid(); ++mfi)
+	for(MFIter mfi(*ro[lev], false); mfi.isValid(); ++mfi)
 	{
 
 		const Box& bx = mfi.validbox();
-		const Box& sbx = (*ro_g[lev])[mfi].box();
+		const Box& sbx = (*ro[lev])[mfi].box();
 
 		if(is_restarting)
 		{
@@ -282,29 +273,25 @@ void incflo_level::incflo_init_fluid(
 							   sbx.hiVect(),
 							   bx.loVect(),
 							   bx.hiVect(),
-							   (*mu_g[lev])[mfi].dataPtr(),
-							   (*lambda_g[lev])[mfi].dataPtr());
+							   (*mu[lev])[mfi].dataPtr(),
+							   (*lambda[lev])[mfi].dataPtr());
 		}
 		else
 		{
 
 			init_fluid(sbx.loVect(),
-					   sbx.hiVect(),
+                       sbx.hiVect(),
 					   bx.loVect(),
 					   bx.hiVect(),
 					   domain.loVect(),
 					   domain.hiVect(),
-					   (*ro_g[lev])[mfi].dataPtr(),
-					   (*p_g[lev])[mfi].dataPtr(),
-					   (*vel_g[lev])[mfi].dataPtr(),
-					   (*mu_g[lev])[mfi].dataPtr(),
-					   (*lambda_g[lev])[mfi].dataPtr(),
-					   &dx,
-					   &dy,
-					   &dz,
-					   &xlen,
-					   &ylen,
-					   &zlen);
+					   (*ro[lev])[mfi].dataPtr(),
+					   (*p[lev])[mfi].dataPtr(),
+					   (*vel[lev])[mfi].dataPtr(),
+					   (*mu[lev])[mfi].dataPtr(),
+					   (*lambda[lev])[mfi].dataPtr(),
+                       &dx, &dy, &dz,
+                       &xlen, &ylen, &zlen);
 		}
 	}
 
@@ -319,14 +306,14 @@ void incflo_level::incflo_init_fluid(
 	if(!is_restarting)
 	{
 
-		for(MFIter mfi(*ro_g[lev]); mfi.isValid(); ++mfi)
+		for(MFIter mfi(*ro[lev]); mfi.isValid(); ++mfi)
 		{
 
-			const Box& sbx = (*ro_g[lev])[mfi].box();
+			const Box& sbx = (*ro[lev])[mfi].box();
 
 			zero_wall_norm_vel(sbx.loVect(),
 							   sbx.hiVect(),
-							   (*vel_g[lev])[mfi].dataPtr(),
+							   (*vel[lev])[mfi].dataPtr(),
 							   bc_ilo.dataPtr(),
 							   bc_ihi.dataPtr(),
 							   bc_jlo.dataPtr(),
@@ -340,19 +327,19 @@ void incflo_level::incflo_init_fluid(
 	}
 
 	if(!nodal_pressure)
-		incflo_extrap_pressure(lev, p0_g[lev]);
+		incflo_extrap_pressure(lev, p0[lev]);
 
-	fill_mf_bc(lev, *ro_g[lev]);
+	fill_mf_bc(lev, *ro[lev]);
 
-	vel_g[lev]->FillBoundary(geom[lev].periodicity());
+	vel[lev]->FillBoundary(geom[lev].periodicity());
 
-	fill_mf_bc(lev, *mu_g[lev]);
-	fill_mf_bc(lev, *lambda_g[lev]);
+	fill_mf_bc(lev, *mu[lev]);
+	fill_mf_bc(lev, *lambda[lev]);
 
 	if(is_restarting == 1)
 	{
 		if(!nodal_pressure)
-			incflo_extrap_pressure(lev, p_g[lev]);
+			incflo_extrap_pressure(lev, p[lev]);
 	}
 	else
 	{
@@ -371,15 +358,15 @@ void incflo_level::incflo_set_bc0(int lev)
 	Box domain(geom[lev].Domain());
 
 	// Don't tile this -- at least for now
-	for(MFIter mfi(*ro_g[lev]); mfi.isValid(); ++mfi)
+	for(MFIter mfi(*ro[lev]); mfi.isValid(); ++mfi)
 	{
-		const Box& sbx = (*ro_g[lev])[mfi].box();
+		const Box& sbx = (*ro[lev])[mfi].box();
 
 		set_bc0(sbx.loVect(),
 				sbx.hiVect(),
-				(*ro_g[lev])[mfi].dataPtr(),
-				(*mu_g[lev])[mfi].dataPtr(),
-				(*lambda_g[lev])[mfi].dataPtr(),
+				(*ro[lev])[mfi].dataPtr(),
+				(*mu[lev])[mfi].dataPtr(),
+				(*lambda[lev])[mfi].dataPtr(),
 				bc_ilo.dataPtr(),
 				bc_ihi.dataPtr(),
 				bc_jlo.dataPtr(),
@@ -393,15 +380,15 @@ void incflo_level::incflo_set_bc0(int lev)
 	}
 
 	if(!nodal_pressure)
-		fill_mf_bc(lev, *p_g[lev]);
+		fill_mf_bc(lev, *p[lev]);
 
-	fill_mf_bc(lev, *ro_g[lev]);
+	fill_mf_bc(lev, *ro[lev]);
 
 	// Put velocity Dirichlet bc's on faces
 	int extrap_dir_bcs = 0;
 	incflo_set_velocity_bcs(lev, extrap_dir_bcs);
 
-	vel_g[lev]->FillBoundary(geom[lev].periodicity());
+	vel[lev]->FillBoundary(geom[lev].periodicity());
 }
 
 void incflo_level::incflo_set_p0(int lev)
@@ -421,34 +408,26 @@ void incflo_level::incflo_set_p0(int lev)
 
 	// We deliberately don't tile this loop since we will be looping
 	//    over bc's on faces and it makes more sense to do this one grid at a time
-	for(MFIter mfi(*ro_g[lev], false); mfi.isValid(); ++mfi)
+	for(MFIter mfi(*ro[lev], false); mfi.isValid(); ++mfi)
 	{
 
 		const Box& bx = mfi.validbox();
 
-		set_p0(bx.loVect(),
-			   bx.hiVect(),
-			   domain.loVect(),
-			   domain.hiVect(),
-			   BL_TO_FORTRAN_ANYD((*p0_g[lev])[mfi]),
-			   &dx,
-			   &dy,
-			   &dz,
-			   &xlen,
-			   &ylen,
-			   &zlen,
+        set_p0(bx.loVect(), bx.hiVect(),
+               domain.loVect(), domain.hiVect(),
+			   BL_TO_FORTRAN_ANYD((*p0[lev])[mfi]),
+			   BL_TO_FORTRAN_ANYD((*gp0[lev])[mfi]),
+               &dx, &dy, &dz,
+               &xlen, &ylen, &zlen,
 			   &delp_dir,
-			   bc_ilo.dataPtr(),
-			   bc_ihi.dataPtr(),
-			   bc_jlo.dataPtr(),
-			   bc_jhi.dataPtr(),
-			   bc_klo.dataPtr(),
-			   bc_khi.dataPtr(),
+               bc_ilo.dataPtr(), bc_ihi.dataPtr(),
+               bc_jlo.dataPtr(), bc_jhi.dataPtr(),
+               bc_klo.dataPtr(), bc_khi.dataPtr(),
 			   &nghost,
 			   &nodal_pressure);
 	}
 
-	// Here we set a separate periodicity flag for p0_g because when we use
+	// Here we set a separate periodicity flag for p0 because when we use
 	// pressure drop (delp) boundary conditions we fill all variables *except* p0
 	// periodically
 
@@ -459,5 +438,6 @@ void incflo_level::incflo_set_p0(int lev)
 		press_per[delp_dir] = 0;
 	p0_periodicity = Periodicity(press_per);
 
-	p0_g[lev]->FillBoundary(p0_periodicity);
+	p0[lev]->FillBoundary(p0_periodicity);
+	 gp0[lev]->FillBoundary(p0_periodicity);
 }

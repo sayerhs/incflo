@@ -3,11 +3,13 @@
 #include <AMReX_BC_TYPES.H>
 #include <AMReX_Box.H>
 #include <AMReX_EBMultiFabUtil.H>
-#include <incflo_F.H>
+#include <incflo_derive_F.H>
 #include <incflo_eb_F.H>
 #include <incflo_icbc_F.H>
 #include <incflo_level.H>
 
+// Initiate vars which cannot be initiated in header
+Vector<Real> incflo_level::gravity(3, 0.);
 std::string incflo_level::load_balance_type = "FixedSize";
 std::string incflo_level::knapsack_weight_type = "RunTimeCosts";
 
@@ -16,9 +18,6 @@ amrex::IntVect incflo_level::e_x(1, 0, 0);
 amrex::IntVect incflo_level::e_y(0, 1, 0);
 amrex::IntVect incflo_level::e_z(0, 0, 1);
 
-int incflo_level::m_eb_basic_grow_cells = 2;
-int incflo_level::m_eb_volume_grow_cells = 2;
-int incflo_level::m_eb_full_grow_cells = 2;
 EBSupport incflo_level::m_eb_support_level = EBSupport::full;
 
 incflo_level::~incflo_level(){};
@@ -43,14 +42,14 @@ void incflo_level::ResizeArrays()
 {
 	int nlevs_max = maxLevel() + 1;
 
-	p_g.resize(nlevs_max);
-	p_go.resize(nlevs_max);
+	p.resize(nlevs_max);
+	p_o.resize(nlevs_max);
 
-	p0_g.resize(nlevs_max);
-	pp_g.resize(nlevs_max);
+	p0.resize(nlevs_max);
+	pp.resize(nlevs_max);
 
-	ro_g.resize(nlevs_max);
-	ro_go.resize(nlevs_max);
+	ro.resize(nlevs_max);
+	ro_o.resize(nlevs_max);
 
 	phi.resize(nlevs_max);
 	diveu.resize(nlevs_max);
@@ -59,17 +58,17 @@ void incflo_level::ResizeArrays()
 	rhs_diff.resize(nlevs_max);
 	phi_diff.resize(nlevs_max);
 
-	// Current (vel_g) and old (vel_go) velocities
-	vel_g.resize(nlevs_max);
-	vel_go.resize(nlevs_max);
+	// Current (vel) and old (vel_o) velocities
+	vel.resize(nlevs_max);
+	vel_o.resize(nlevs_max);
 
 	// Pressure gradients
 	gp.resize(nlevs_max);
 	gp0.resize(nlevs_max);
 
-	mu_g.resize(nlevs_max);
-	lambda_g.resize(nlevs_max);
-	trD_g.resize(nlevs_max);
+	mu.resize(nlevs_max);
+	lambda.resize(nlevs_max);
+	trD.resize(nlevs_max);
 
 	// Vorticity
 	vort.resize(nlevs_max);
@@ -224,20 +223,20 @@ void incflo_level::incflo_compute_vort(int lev)
 #ifdef _OPENMP
 #pragma omp parallel
 #endif
-	for(MFIter mfi(*vel_g[lev], true); mfi.isValid(); ++mfi)
+	for(MFIter mfi(*vel[lev], true); mfi.isValid(); ++mfi)
 	{
 		// Tilebox
 		Box bx = mfi.tilebox();
 
 		// This is to check efficiently if this tile contains any eb stuff
-		const EBFArrayBox& vel_fab = dynamic_cast<EBFArrayBox const&>((*vel_g[lev])[mfi]);
+		const EBFArrayBox& vel_fab = dynamic_cast<EBFArrayBox const&>((*vel[lev])[mfi]);
 		const EBCellFlagFab& flags = vel_fab.getEBCellFlagFab();
 
 		if(flags.getType(amrex::grow(bx, 0)) == FabType::regular)
 		{
 			compute_vort(BL_TO_FORTRAN_BOX(bx),
 						 BL_TO_FORTRAN_ANYD((*vort[lev])[mfi]),
-						 BL_TO_FORTRAN_ANYD((*vel_g[lev])[mfi]),
+						 BL_TO_FORTRAN_ANYD((*vel[lev])[mfi]),
 						 geom[lev].CellSize());
 		}
 		else
@@ -246,3 +245,48 @@ void incflo_level::incflo_compute_vort(int lev)
 		}
 	}
 }
+
+// This function checks if ebfactory is allocated with 
+// the proper dm and ba
+
+void
+incflo_level::incflo_update_ebfactory (int a_lev)
+{
+   // This assert is to verify that some kind of EB geometry
+   // has already been defined
+   AMREX_ASSERT(not EB2::IndexSpace::empty());
+
+   const DistributionMapping&      dm = DistributionMap(a_lev);
+   const BoxArray&                 ba = boxArray(a_lev);
+   const EB2::IndexSpace&        ebis = EB2::IndexSpace::top();
+   const EB2::Level&      ebis_level  = ebis.getLevel(geom[a_lev]);
+      
+   if ( ebfactory[a_lev].get() == nullptr )
+   {
+      amrex::Print() << "Updating ebfactory" << std::endl;
+
+      ebfactory[a_lev].reset(new EBFArrayBoxFactory( ebis_level, geom[a_lev], ba, dm,
+                                                     {m_eb_basic_grow_cells,
+                                                      m_eb_volume_grow_cells,
+                                                      m_eb_full_grow_cells},
+                                                      m_eb_support_level));
+   }
+   else                         
+   {
+      amrex::Print() << "Updating ebfactory" << std::endl;
+      
+      const DistributionMapping&  eb_dm = ebfactory[a_lev]->DistributionMap();
+      const BoxArray&             eb_ba = ebfactory[a_lev]->boxArray();
+
+      if ( (dm != eb_dm) || (ba != eb_ba) )
+      {
+
+         ebfactory[a_lev].reset(new EBFArrayBoxFactory( ebis_level, geom[a_lev], ba, dm,
+                                                        {m_eb_basic_grow_cells,
+                                                         m_eb_volume_grow_cells,
+                                                         m_eb_full_grow_cells},
+                                                         m_eb_support_level));         
+      }
+   }
+}
+   

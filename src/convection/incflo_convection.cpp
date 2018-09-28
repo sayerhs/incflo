@@ -1,4 +1,3 @@
-#include <incflo_F.H>
 #include <incflo_level.H>
 #include <incflo_mac_F.H>
 #include <incflo_proj_F.H>
@@ -15,17 +14,19 @@ void incflo_level::incflo_compute_ugradu_predictor(int lev,
 
 	incflo_compute_velocity_at_faces(lev, vel);
 
-	mac_projection->apply_projection(m_u_mac, m_v_mac, m_w_mac, ro_g);
+	mac_projection->apply_projection(m_u_mac, m_v_mac, m_w_mac, ro);
 
-	// Get EB geometric info
-	Array<const MultiCutFab*, AMREX_SPACEDIM> areafrac;
-	Array<const MultiCutFab*, AMREX_SPACEDIM> facecent;
-	const amrex::MultiFab* volfrac;
+    // Get EB geometric info
+    Array< const MultiCutFab*,AMREX_SPACEDIM> areafrac;
+    Array< const MultiCutFab*,AMREX_SPACEDIM> facecent;
+    const amrex::MultiFab*                    volfrac;
+    const amrex::MultiCutFab*                 bndrycent;
 
-	areafrac = ebfactory[lev]->getAreaFrac();
-	facecent = ebfactory[lev]->getFaceCent();
-	volfrac = &(ebfactory[lev]->getVolFrac());
-
+    areafrac  =   ebfactory[lev] -> getAreaFrac();
+    facecent  =   ebfactory[lev] -> getFaceCent();
+    volfrac   = &(ebfactory[lev] -> getVolFrac());
+    bndrycent = &(ebfactory[lev] -> getBndryCent());
+       
 #ifdef _OPENMP
 #pragma omp parallel
 #endif
@@ -43,7 +44,7 @@ void incflo_level::incflo_compute_ugradu_predictor(int lev,
 			// If tile is completely covered by EB geometry, set slopes
 			// value to some very large number so we know if
 			// we accidentaly use these covered slopes later in calculations
-			conv[lev].setVal(1.2345e300, bx, 0, 3);
+			conv.setVal(1.2345e300, bx, 0, 3);
 		}
 		else
 		{
@@ -87,6 +88,7 @@ void incflo_level::incflo_compute_ugradu_predictor(int lev,
 								  BL_TO_FORTRAN_ANYD((*facecent[2])[mfi]),
 								  BL_TO_FORTRAN_ANYD(flags),
 								  BL_TO_FORTRAN_ANYD((*volfrac)[mfi]),
+                                  BL_TO_FORTRAN_ANYD((*bndrycent)[mfi]),
 								  (*xslopes[lev])[mfi].dataPtr(),
 								  (*yslopes[lev])[mfi].dataPtr(),
 								  BL_TO_FORTRAN_ANYD((*zslopes[lev])[mfi]),
@@ -119,15 +121,17 @@ void incflo_level::incflo_compute_ugradu_corrector(int lev,
 	incflo_compute_velocity_slopes(lev, vel);
 	incflo_compute_velocity_at_faces(lev, vel);
 
-	mac_projection->apply_projection(m_u_mac, m_v_mac, m_w_mac, ro_g);
+	mac_projection->apply_projection(m_u_mac, m_v_mac, m_w_mac, ro);
 	// Get EB geometric info
 	Array<const MultiCutFab*, AMREX_SPACEDIM> areafrac;
 	Array<const MultiCutFab*, AMREX_SPACEDIM> facecent;
 	const amrex::MultiFab* volfrac;
+    const amrex::MultiCutFab* bndrycent;
 
 	areafrac = ebfactory[lev]->getAreaFrac();
 	facecent = ebfactory[lev]->getFaceCent();
 	volfrac = &(ebfactory[lev]->getVolFrac());
+    bndrycent = &(ebfactory[lev]->getBndryCent());
 
 #ifdef _OPENMP
 #pragma omp parallel
@@ -146,7 +150,7 @@ void incflo_level::incflo_compute_ugradu_corrector(int lev,
 			// If tile is completely covered by EB geometry, set slopes
 			// value to some very large number so we know if
 			// we accidentaly use these covered slopes later in calculations
-			conv[lev].setVal(1.2345e300, bx, 0, 3);
+			conv.setVal(1.2345e300, bx, 0, 3);
 		}
 		else
 		{
@@ -190,6 +194,7 @@ void incflo_level::incflo_compute_ugradu_corrector(int lev,
 								  BL_TO_FORTRAN_ANYD((*facecent[2])[mfi]),
 								  BL_TO_FORTRAN_ANYD(flags),
 								  BL_TO_FORTRAN_ANYD((*volfrac)[mfi]),
+                                  BL_TO_FORTRAN_ANYD((*bndrycent)[mfi]),
 								  (*xslopes[lev])[mfi].dataPtr(),
 								  (*yslopes[lev])[mfi].dataPtr(),
 								  BL_TO_FORTRAN_ANYD((*zslopes[lev])[mfi]),

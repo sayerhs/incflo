@@ -43,6 +43,7 @@ extern "C"
         const amrex::Real* cent_z,const int*   czlo,const int*  czhi, 
         const void* flags, const int*  flo, const int*   fhi, 
         const amrex::Real* vfrac, const int* vflo, const int*  vfhi, 
+        const amrex::Real* bcent, const int* blo, const int*  bhi, 
 	const amrex::Real* xslopes, 
 	const amrex::Real* yslopes, 
 	const amrex::Real* zslopes, const int* slo, const int* shi, 
@@ -56,18 +57,18 @@ extern "C"
     void compute_mac_diveu (
 	const int* lo, const int* hi,
 	amrex::Real* diveu,  const int* slo, const int* shi,
-	const amrex::Real* u_g, const int* ulo, const int* uhi,
-	const amrex::Real* v_g, const int* vlo, const int* vhi,
-	const amrex::Real* w_g, const int* wlo, const int* whi,
+	const amrex::Real* u, const int* ulo, const int* uhi,
+	const amrex::Real* v, const int* vlo, const int* vhi,
+	const amrex::Real* w, const int* wlo, const int* whi,
 	const amrex::Real* dx
         );
 
    void compute_mac_diveu_eb (
       const int* lo, const int* hi,
       amrex::Real* diveu,  const int* slo, const int* shi,
-      const amrex::Real* u_g, const int* ulo, const int* uhi,
-      const amrex::Real* v_g, const int* vlo, const int* vhi,
-      const amrex::Real* w_g, const int* wlo, const int* whi,
+      const amrex::Real* u, const int* ulo, const int* uhi,
+      const amrex::Real* v, const int* vlo, const int* vhi,
+      const amrex::Real* w, const int* wlo, const int* whi,
       const amrex::Real* afracx, const int* axlo, const int* axhi,
       const amrex::Real* afracy, const int* aylo, const int* ayhi,
       const amrex::Real* afracz, const int* azlo, const int* azhi,
@@ -86,9 +87,9 @@ extern "C"
 
     void set_mac_velocity_bcs( 
         const int* slo, const int* shi,
-        amrex::Real* u_g,  const int* ulo, const int* uhi,
-        amrex::Real* v_g,  const int* vlo, const int* vhi,
-        amrex::Real* w_g,  const int* wlo, const int* whi,
+        amrex::Real* u,  const int* ulo, const int* uhi,
+        amrex::Real* v,  const int* vlo, const int* vhi,
+        amrex::Real* w,  const int* wlo, const int* whi,
         const int* bc_ilo, const int* bc_ihi,
         const int* bc_jlo, const int* bc_jhi,
         const int* bc_klo, const int* bc_khi,
@@ -100,7 +101,7 @@ extern "C"
 	const int* lo, const int* hi,
 	amrex::Real* bcoeff, const int* alo, const int* ahi,
 	const amrex::Real* u,     const int* ulo, const int* uhi,
-	const amrex::Real* ro_g, const int* slo, const int* shi,
+	const amrex::Real* ro, const int* slo, const int* shi,
 	const int* dir
         );
 

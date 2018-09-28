@@ -8,15 +8,10 @@
 
 #include <AMReX_ParmParse.H>
 
-//#include <AMReX_VisMF.H>  // amrex::VisMF::Write(MultiFab)
-//#include <sstream>
-
 #include <AMReX_EB_levelset.H>
 #include <algorithm>
 #include <incflo_eb_F.H>
 #include <incflo_level.H>
-
-using namespace std;
 
 /********************************************************************************
  * Function to create a simple hopper EB.                                       *
@@ -57,9 +52,7 @@ void incflo_level::make_eb_hopper(int lev)
      ***************************************************************************/
 
 	// set up ebfactory
-	int m_eb_basic_grow_cells = nghost;
-	int m_eb_volume_grow_cells = nghost;
-	int m_eb_full_grow_cells = nghost;
+
 	EBSupport m_eb_support_level = EBSupport::full;
 
 	amrex::Print() << " " << std::endl;

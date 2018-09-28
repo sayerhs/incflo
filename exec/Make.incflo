@@ -7,9 +7,10 @@ include $(AMREX_HOME)/Tools/GNUMake/Make.defs
 
 #These are the directories in incflo/src
 Bdirs 	:= src
-Bdirs 	+= src/check_data
 Bdirs 	+= src/convection
+Bdirs 	+= src/derive
 Bdirs 	+= src/diffusion
+Bdirs 	+= src/divop
 Bdirs 	+= src/embedded_boundaries
 Bdirs 	+= src/init_and_boundary_conds
 Bdirs 	+= src/io
@@ -29,6 +30,11 @@ VPATH_LOCATIONS   += $(TOP)/src/include
 #These are the directories in AMReX
 
 Pdirs   := Base AmrCore Boundary Particle EB
+
+ifeq ($(USE_HYPRE), TRUE)
+Pdirs   += Extern/HYPRE
+endif
+
 Ppack	+= $(foreach dir, $(Pdirs), $(AMREX_HOME)/Src/$(dir)/Make.package)
 Plocs	+= $(foreach dir, $(Pdirs), $(AMREX_HOME)/Src/$(dir))
 
