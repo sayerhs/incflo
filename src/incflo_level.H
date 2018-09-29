@@ -19,7 +19,7 @@
 #include <AMReX_EB2_IF_Polynomial.H>
 #include <AMReX_EB2_IF_Translation.H>
 
-#include <incflo_eb_if.H>
+#include <eb_if.H>
 #include <MacProjection.H>
 
 class incflo_level : public AmrCore
@@ -133,7 +133,6 @@ protected:
 	void incflo_apply_projection(int lev, amrex::Real scaling_factor, bool proj_2);
 	void incflo_set_scalar_bcs(int lev);
 	void incflo_set_velocity_bcs(int lev, int extrap_dir_bcs);
-	void incflo_set_pressure_bcs(int lev);
 
 	void AllocateArrays(int lev);
 	void RegridArrays(int lev);
@@ -223,7 +222,6 @@ private:
 
 	void
 	incflo_apply_forcing_terms(int lev, amrex::Real dt, Vector<std::unique_ptr<MultiFab>>& vel);
-	void incflo_add_grad_phi(int lev, amrex::Real coeff, amrex::MultiFab& phi);
 	void incflo_compute_velocity_slopes(int lev, Vector<std::unique_ptr<MultiFab>>& vel);
 	void incflo_compute_velocity_at_faces(int lev, Vector<std::unique_ptr<MultiFab>>& vel);
 
