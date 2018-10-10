@@ -6,14 +6,12 @@
 #include <AMReX_VisMF.H>
 #include <AMReX_iMultiFab.H>
 
-#include <incflo_level.H>
+#include <incflo.H>
 #include <derive_F.H>
 #include <io_F.H>
 #include <setup_F.H>
 
 // Declare and initialise variables
-int verbose = -1;
-
 Real stop_time = -1.0;
 int max_step = -1;
 bool steady_state = false;
@@ -28,10 +26,7 @@ int last_plt = -1;
 std::string plot_file{"plt"};
 bool write_eb_surface = false;
 
-int repl_x = 1;
-int repl_y = 1;
-int repl_z = 1;
-
+int repl_x = 1; int repl_y = 1; int repl_z = 1;
 int regrid_int = -1;
 
 void ReadParameters();
@@ -75,16 +70,13 @@ int main(int argc, char* argv[])
 	Real time = 0.0L;
 	int nstep = 0; 
 
-	// Default AMR level = 0
-	int lev = 0;
-
-	// Define dt here in main (dt is not a member of incflo_level)
+	// Define dt here in main (dt is not a member of incflo)
 	Real dt = -1;
 
-	// Default constructor. Note inheritance: incflo_level : AmrCore : AmrMesh
+	// Default constructor. Note inheritance: incflo : AmrCore : AmrMesh
 	//                                                                  |
 	//  => Geometry is constructed here:  (constructs Geometry) --------+
-	incflo_level my_incflo;
+	incflo my_incflo;
 
 	// Initialize internals from ParmParse database
 	my_incflo.InitParams();
@@ -93,20 +85,20 @@ int main(int argc, char* argv[])
 	my_incflo.ResizeArrays();
 
 	// Initialize derived internals
-	my_incflo.Init(lev, time);
+	my_incflo.Init(time);
 
 	// Either init from scratch or from the checkpoint file
 	int restart_flag = 0;
 	if(restart_file.empty())
 	{
-		// NOTE: this also builds ebfactories and level-set
-		my_incflo.InitLevelData(lev, time);
+		// NOTE: this also builds ebfactories 
+		my_incflo.InitLevelData(time);
 	}
 	else
 	{
 		restart_flag = 1;
 
-		// NOTE: 1) this also builds ebfactories and level-set 
+		// NOTE: 1) this also builds ebfactories 
         //       2) this can change the grids (during replication)
 		IntVect Nrep(repl_x, repl_y, repl_z);
 		my_incflo.Restart(restart_file, &nstep, &dt, &time, Nrep);
@@ -114,14 +106,14 @@ int main(int argc, char* argv[])
 
 
 	// Regrid
-	my_incflo.Regrid(lev);
+	my_incflo.Regrid();
 
     // Post-initialisation step
-	my_incflo.PostInit(lev, dt, time, nstep, restart_flag, stop_time, steady_state);
+	my_incflo.PostInit(dt, time, nstep, restart_flag, stop_time, steady_state);
 
 	// Write out EB sruface
 	if(write_eb_surface)
-		my_incflo.WriteEBSurface(lev);
+		my_incflo.WriteEBSurface();
 
 	Real end_init = ParallelDescriptor::second() - strt_time;
 	ParallelDescriptor::ReduceRealMax(end_init, ParallelDescriptor::IOProcessorNumber());
@@ -137,7 +129,8 @@ int main(int argc, char* argv[])
 	//    if plot_int > 0
 	if(restart_file.empty() && plot_int > 0)
 	{
-		my_incflo.incflo_compute_vort(lev);
+		my_incflo.incflo_compute_strainrate();
+		my_incflo.incflo_compute_vort();
 		my_incflo.WritePlotFile(plot_file, nstep, dt, time);
 	}
 
@@ -165,9 +158,9 @@ int main(int argc, char* argv[])
 				Real strt_step = ParallelDescriptor::second();
 
 				if(!steady_state && regrid_int > -1 && nstep % regrid_int == 0)
-                    my_incflo.Regrid(lev);
+                    my_incflo.Regrid();
 
-				my_incflo.Advance(lev, nstep, steady_state, dt, prev_dt, time, stop_time);
+				my_incflo.Advance(nstep, steady_state, dt, prev_dt, time, stop_time);
 
 				Real end_step = ParallelDescriptor::second() - strt_step;
 				ParallelDescriptor::ReduceRealMax(end_step,
@@ -181,7 +174,8 @@ int main(int argc, char* argv[])
 
 					if((plot_int > 0) && (nstep % plot_int == 0))
 					{
-						my_incflo.incflo_compute_vort(lev);
+                        my_incflo.incflo_compute_strainrate();
+						my_incflo.incflo_compute_vort();
 						my_incflo.WritePlotFile(plot_file, nstep, dt, time);
 						last_plt = nstep;
 					}
@@ -211,7 +205,8 @@ int main(int argc, char* argv[])
 		my_incflo.WriteCheckPointFile(check_file, nstep, dt, time);
 	if(plot_int > 0 && nstep != last_plt)
     {
-        my_incflo.incflo_compute_vort(lev);
+		my_incflo.incflo_compute_strainrate();
+        my_incflo.incflo_compute_vort();
 		my_incflo.WritePlotFile(plot_file, nstep, dt, time);
     }
 
@@ -234,8 +229,6 @@ void ReadParameters()
 	{
 		ParmParse pp("amr");
 
-		pp.query("verbose", verbose);
-
 		pp.query("stop_time", stop_time);
 		pp.query("max_step", max_step);
 		pp.query("steady_state", steady_state);
@@ -254,4 +247,3 @@ void ReadParameters()
 		pp.query("regrid_int", regrid_int);
 	}
 }
-

@@ -5,6 +5,7 @@
 #include <AMReX_ParmParse.H>
 
 #include <MacProjection.H>
+#include <boundary_conditions_F.H>
 #include <mac_F.H>
 #include <projection_F.H>
 #include <setup_F.H>
@@ -17,9 +18,7 @@ IntVect MacProjection::e_x(1, 0, 0);
 IntVect MacProjection::e_y(0, 1, 0);
 IntVect MacProjection::e_z(0, 0, 1);
 
-//
-//
-//
+// Constructor
 MacProjection::MacProjection(AmrCore* a_amrcore,
 							 int a_nghost,
 							 Vector<std::unique_ptr<EBFArrayBoxFactory>>* a_ebfactory)
@@ -31,16 +30,12 @@ MacProjection::MacProjection(AmrCore* a_amrcore,
 	read_inputs();
 }
 
-//
-//
-//
+// Destructor
 MacProjection::~MacProjection()
 {
 }
 
-//
-//
-//
+// Read inputs
 void MacProjection::read_inputs()
 {
 	ParmParse pp("mac");
@@ -55,24 +50,23 @@ void MacProjection::read_inputs()
    pp.query( "bottom_solver_type",  bottom_solver_type );
 }
 
-//
-//
-//
-void MacProjection::set_bcs(IArrayBox* a_bc_ilo,
-							IArrayBox* a_bc_ihi,
-							IArrayBox* a_bc_jlo,
-							IArrayBox* a_bc_jhi,
-							IArrayBox* a_bc_klo,
-							IArrayBox* a_bc_khi)
+// Set boundary conditions
+void MacProjection::set_bcs(Vector<std::unique_ptr<IArrayBox>>& a_bc_ilo,
+							Vector<std::unique_ptr<IArrayBox>>& a_bc_ihi,
+							Vector<std::unique_ptr<IArrayBox>>& a_bc_jlo,
+							Vector<std::unique_ptr<IArrayBox>>& a_bc_jhi,
+							Vector<std::unique_ptr<IArrayBox>>& a_bc_klo,
+							Vector<std::unique_ptr<IArrayBox>>& a_bc_khi)
 {
-	m_bc_ilo = a_bc_ilo;
-	m_bc_ihi = a_bc_ihi;
-	m_bc_jlo = a_bc_jlo;
-	m_bc_jhi = a_bc_jhi;
-	m_bc_klo = a_bc_klo;
-	m_bc_khi = a_bc_khi;
+	m_bc_ilo = &a_bc_ilo;
+	m_bc_ihi = &a_bc_ihi;
+	m_bc_jlo = &a_bc_jlo;
+	m_bc_jhi = &a_bc_jhi;
+	m_bc_klo = &a_bc_klo;
+	m_bc_khi = &a_bc_khi;
 
 	int bc_lo[3], bc_hi[3];
+    int lev = 0;
 	Box domain(m_amrcore->Geom(0).Domain());
 
 	set_ppe_bc(bc_lo,
@@ -80,26 +74,24 @@ void MacProjection::set_bcs(IArrayBox* a_bc_ilo,
 			   domain.loVect(),
 			   domain.hiVect(),
 			   &m_nghost,
-			   m_bc_ilo->dataPtr(),
-			   m_bc_ihi->dataPtr(),
-			   m_bc_jlo->dataPtr(),
-			   m_bc_jhi->dataPtr(),
-			   m_bc_klo->dataPtr(),
-			   m_bc_khi->dataPtr());
+			   (*m_bc_ilo)[lev]->dataPtr(),
+			   (*m_bc_ihi)[lev]->dataPtr(),
+			   (*m_bc_jlo)[lev]->dataPtr(),
+			   (*m_bc_jhi)[lev]->dataPtr(),
+			   (*m_bc_klo)[lev]->dataPtr(),
+			   (*m_bc_khi)[lev]->dataPtr());
 
 	m_lobc = {(LinOpBCType)bc_lo[0], (LinOpBCType)bc_lo[1], (LinOpBCType)bc_lo[2]};
 	m_hibc = {(LinOpBCType)bc_hi[0], (LinOpBCType)bc_hi[1], (LinOpBCType)bc_hi[2]};
 }
 
-//
 // redefine working arrays if amrcore has changed
-//
 void MacProjection::update_internals()
 {
 
-	if(m_diveu.size() != (m_amrcore->finestLevel() + 1))
+	if(m_divu.size() != (m_amrcore->finestLevel() + 1))
 	{
-		m_diveu.resize(m_amrcore->finestLevel() + 1);
+		m_divu.resize(m_amrcore->finestLevel() + 1);
 		m_phi.resize(m_amrcore->finestLevel() + 1);
 		m_b.resize(m_amrcore->finestLevel() + 1);
 	}
@@ -107,13 +99,13 @@ void MacProjection::update_internals()
 	for(int lev = 0; lev <= m_amrcore->finestLevel(); ++lev)
 	{
 
-		if(m_diveu[lev] == nullptr ||
-		   !BoxArray::SameRefs(m_diveu[lev]->boxArray(), m_amrcore->boxArray(lev)) ||
-		   !DistributionMapping::SameRefs(m_diveu[lev]->DistributionMap(),
+		if(m_divu[lev] == nullptr ||
+		   !BoxArray::SameRefs(m_divu[lev]->boxArray(), m_amrcore->boxArray(lev)) ||
+		   !DistributionMapping::SameRefs(m_divu[lev]->DistributionMap(),
 										  m_amrcore->DistributionMap(lev)))
 		{
 
-			m_diveu[lev].reset(new MultiFab(m_amrcore->boxArray(lev),
+			m_divu[lev].reset(new MultiFab(m_amrcore->boxArray(lev),
 											m_amrcore->DistributionMap(lev),
 											1,
 											m_nghost,
@@ -127,10 +119,8 @@ void MacProjection::update_internals()
 										  MFInfo(),
 										  *((*m_ebfactory)[lev])));
 
-			//
 			// Staggered quantities
 			// NOTE: no ghost node for grad(phi)
-			//
 			m_b[lev].resize(3);
 
 			BoxArray x_ba = m_amrcore->boxArray(lev);
@@ -190,9 +180,10 @@ void MacProjection::update_internals()
 void MacProjection::apply_projection(Vector<std::unique_ptr<MultiFab>>& u,
 									 Vector<std::unique_ptr<MultiFab>>& v,
 									 Vector<std::unique_ptr<MultiFab>>& w,
-									 const Vector<std::unique_ptr<MultiFab>>& ro)
+									 const Vector<std::unique_ptr<MultiFab>>& ro, 
+                                     Real time)
 {
-	BL_PROFILE("MacProjection::apply_projection()");
+    BL_PROFILE("MacProjection::apply_projection()");
 
 	if(verbose)
 		Print() << "MAC Projection:\n";
@@ -212,11 +203,11 @@ void MacProjection::apply_projection(Vector<std::unique_ptr<MultiFab>>& u,
 
 	for(int lev = 0; lev <= m_amrcore->finestLevel(); ++lev)
 	{
-		// Compute beta coefficients ( div(beta*grad(phi)) = RHS )
+	    // Compute beta coefficients ( div(beta*grad(phi)) = RHS )
 		compute_b_coeff(u, v, w, ro, lev);
 
 		// Set velocity bcs
-		set_velocity_bcs(lev, u, v, w);
+		set_velocity_bcs(lev, u, v, w, time);
 
 		// Store in temporaries
 		(vel[lev])[0] = u[lev].get();
@@ -232,12 +223,12 @@ void MacProjection::apply_projection(Vector<std::unique_ptr<MultiFab>>& u,
             for(int i = 0; i < 3; i++)
                 (vel[lev])[i]->FillBoundary(m_amrcore->Geom(lev).periodicity());
 
-			EB_computeDivergence(*m_diveu[lev], GetArrOfConstPtrs(vel[lev]), m_amrcore->Geom(lev));
+			EB_computeDivergence(*m_divu[lev], GetArrOfConstPtrs(vel[lev]), m_amrcore->Geom(lev));
 
-			Print() << "  * On level " << lev << " max(abs(diveu)) = " << norm0(m_diveu, lev)
+			Print() << "  * On level " << lev << " max(abs(divu)) = " << norm0(m_divu, lev)
 					<< "\n";
-		}
-	}
+        }
+    }
 
 	//
 	// Perform MAC projection
@@ -247,19 +238,14 @@ void MacProjection::apply_projection(Vector<std::unique_ptr<MultiFab>>& u,
 	macproj.setDomainBC(m_lobc, m_hibc);
 	macproj.setVerbose(m_mg_verbose);
 
-   // The default bottom solver is BiCG
-   // Other options include:
-   ///   Hypre IJ AMG solver
-   //    macproj.getMLMG().setBottomSolver(MLMG::BottomSolver::hypre);
-   ///   regular smoothing
-   //    macproj.getMLMG().setBottomSolver(MLMG::BottomSolver::smoother);
-
-   if (bottom_solver_type == "smoother")
-   {
-      macproj.setBottomSolver(MLMG::BottomSolver::smoother);
-   } else if (bottom_solver_type == "hypre") {
-      macproj.setBottomSolver(MLMG::BottomSolver::hypre);
-   }
+    if(bottom_solver_type == "smoother")
+    {
+        macproj.setBottomSolver(MLMG::BottomSolver::smoother);
+    } 
+    else if(bottom_solver_type == "hypre") 
+    {
+        macproj.setBottomSolver(MLMG::BottomSolver::hypre);
+    }
 
 	macproj.project(m_mg_rtol);
 
@@ -274,14 +260,14 @@ void MacProjection::apply_projection(Vector<std::unique_ptr<MultiFab>>& u,
             for(int i = 0; i < 3; i++)
                 (vel[lev])[i]->FillBoundary(m_amrcore->Geom(lev).periodicity());
 
-			EB_computeDivergence(*m_diveu[lev], GetArrOfConstPtrs(vel[lev]), m_amrcore->Geom(lev));
+			EB_computeDivergence(*m_divu[lev], GetArrOfConstPtrs(vel[lev]), m_amrcore->Geom(lev));
 
-			Print() << "  * On level " << lev << " max(abs(diveu)) = " << norm0(m_diveu, lev)
+			Print() << "  * On level " << lev << " max(abs(divu)) = " << norm0(m_divu, lev)
 					<< "\n";
 		}
         
 		// Set velocity bcs
-		set_velocity_bcs(lev, u, v, w);
+		set_velocity_bcs(lev, u, v, w, time);
 	}
 }
 
@@ -291,7 +277,8 @@ void MacProjection::apply_projection(Vector<std::unique_ptr<MultiFab>>& u,
 void MacProjection::set_velocity_bcs(int lev,
 									 Vector<std::unique_ptr<MultiFab>>& u,
 									 Vector<std::unique_ptr<MultiFab>>& v,
-									 Vector<std::unique_ptr<MultiFab>>& w)
+									 Vector<std::unique_ptr<MultiFab>>& w, 
+                                     Real time)
 {
 	BL_PROFILE("MacProjection::set_velocity_bcs()");
 
@@ -304,21 +291,22 @@ void MacProjection::set_velocity_bcs(int lev,
 #ifdef _OPENMP
 #pragma omp parallel
 #endif
-	for(MFIter mfi(*m_diveu[lev], true); mfi.isValid(); ++mfi)
+	for(MFIter mfi(*m_divu[lev], false); mfi.isValid(); ++mfi)
 	{
-		const Box& bx = (*m_diveu[lev])[mfi].box();
+		const Box& bx = (*m_divu[lev])[mfi].box();
 
-		set_mac_velocity_bcs(bx.loVect(),
+		set_mac_velocity_bcs(&time, 
+                             bx.loVect(),
 							 bx.hiVect(),
 							 BL_TO_FORTRAN_ANYD((*u[lev])[mfi]),
 							 BL_TO_FORTRAN_ANYD((*v[lev])[mfi]),
 							 BL_TO_FORTRAN_ANYD((*w[lev])[mfi]),
-							 m_bc_ilo->dataPtr(),
-							 m_bc_ihi->dataPtr(),
-							 m_bc_jlo->dataPtr(),
-							 m_bc_jhi->dataPtr(),
-							 m_bc_klo->dataPtr(),
-							 m_bc_khi->dataPtr(),
+							 (*m_bc_ilo)[lev]->dataPtr(),
+							 (*m_bc_ihi)[lev]->dataPtr(),
+							 (*m_bc_jlo)[lev]->dataPtr(),
+							 (*m_bc_jhi)[lev]->dataPtr(),
+							 (*m_bc_klo)[lev]->dataPtr(),
+							 (*m_bc_khi)[lev]->dataPtr(),
 							 domain.loVect(),
 							 domain.hiVect(),
 							 &m_nghost);
@@ -348,19 +336,19 @@ void MacProjection::set_ccmf_bcs(int lev, MultiFab& mf)
 #ifdef _OPENMP
 #pragma omp parallel
 #endif
-	for(MFIter mfi(mf, true); mfi.isValid(); ++mfi)
+	for(MFIter mfi(mf, false); mfi.isValid(); ++mfi)
 	{
 		const Box& sbx = mf[mfi].box();
 
 		fill_bc0(mf[mfi].dataPtr(),
 				 sbx.loVect(),
 				 sbx.hiVect(),
-				 m_bc_ilo->dataPtr(),
-				 m_bc_ihi->dataPtr(),
-				 m_bc_jlo->dataPtr(),
-				 m_bc_jhi->dataPtr(),
-				 m_bc_klo->dataPtr(),
-				 m_bc_khi->dataPtr(),
+				 (*m_bc_ilo)[lev]->dataPtr(),
+				 (*m_bc_ihi)[lev]->dataPtr(),
+				 (*m_bc_jlo)[lev]->dataPtr(),
+				 (*m_bc_jhi)[lev]->dataPtr(),
+				 (*m_bc_klo)[lev]->dataPtr(),
+				 (*m_bc_khi)[lev]->dataPtr(),
 				 domain.loVect(),
 				 domain.hiVect(),
 				 &m_nghost);
@@ -404,7 +392,7 @@ void MacProjection::compute_b_coeff(const Vector<std::unique_ptr<MultiFab>>& u,
 		Box wbx = mfi.tilebox(e_z);
 
 		// this is to check efficiently if this tile contains any eb stuff
-		const EBFArrayBox& div_fab = dynamic_cast<EBFArrayBox const&>((*m_diveu[lev])[mfi]);
+		const EBFArrayBox& div_fab = static_cast<EBFArrayBox const&>((*m_divu[lev])[mfi]);
 		const EBCellFlagFab& flags = div_fab.getEBCellFlagFab();
 
 		if(flags.getType(grow(bx, 0)) == FabType::covered)
@@ -418,21 +406,18 @@ void MacProjection::compute_b_coeff(const Vector<std::unique_ptr<MultiFab>>& u,
 			// X direction
 			compute_bcoeff_mac(BL_TO_FORTRAN_BOX(ubx),
 							   BL_TO_FORTRAN_ANYD((*(m_b[lev][0]))[mfi]),
-							   BL_TO_FORTRAN_ANYD((*u[lev])[mfi]),
 							   BL_TO_FORTRAN_ANYD((*ro[lev])[mfi]),
 							   &xdir);
 
 			// Y direction
 			compute_bcoeff_mac(BL_TO_FORTRAN_BOX(vbx),
 							   BL_TO_FORTRAN_ANYD((*(m_b[lev][1]))[mfi]),
-							   BL_TO_FORTRAN_ANYD((*v[lev])[mfi]),
 							   BL_TO_FORTRAN_ANYD((*ro[lev])[mfi]),
 							   &ydir);
 
 			// Z direction
 			compute_bcoeff_mac(BL_TO_FORTRAN_BOX(wbx),
 							   BL_TO_FORTRAN_ANYD((*(m_b[lev][2]))[mfi]),
-							   BL_TO_FORTRAN_ANYD((*w[lev])[mfi]),
 							   BL_TO_FORTRAN_ANYD((*ro[lev])[mfi]),
 							   &zdir);
 		}

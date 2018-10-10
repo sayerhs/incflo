@@ -1,11 +1,14 @@
 #include <algorithm>
-#include <eb_F.H>
-#include <incflo_level.H>
+#include <embedded_boundaries_F.H>
+#include <incflo.H>
 
-void incflo_level::WriteEBSurface(int lev)
+void incflo::WriteEBSurface()
 {
 	if(Geom(0).isAllPeriodic())
 		return;
+
+    // Only write at the finest level! 
+    int lev = nlev - 1;
 
 	const Real* dx = Geom(lev).CellSize();
 
@@ -20,7 +23,7 @@ void incflo_level::WriteEBSurface(int lev)
 	for(MFIter mfi(mf_ba); mfi.isValid(); ++mfi)
 	{
 
-		const auto& sfab = dynamic_cast<EBFArrayBox const&>((mf_ba)[mfi]);
+		const auto& sfab = static_cast<EBFArrayBox const&>((mf_ba)[mfi]);
 		const auto& my_flag = sfab.getEBCellFlagFab();
 
 		const Box& bx = mfi.validbox();
@@ -66,7 +69,7 @@ void incflo_level::WriteEBSurface(int lev)
 	for(MFIter mfi(mf_ba); mfi.isValid(); ++mfi)
 	{
 
-		const auto& sfab = dynamic_cast<EBFArrayBox const&>((mf_ba)[mfi]);
+		const auto& sfab = static_cast<EBFArrayBox const&>((mf_ba)[mfi]);
 		const auto& my_flag = sfab.getEBCellFlagFab();
 
 		const Box& bx = mfi.validbox();

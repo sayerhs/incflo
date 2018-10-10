@@ -26,24 +26,26 @@ public:
 
 	~MacProjection();
 
-	void set_bcs(amrex::IArrayBox* a_bc_ilo,
-				 amrex::IArrayBox* a_bc_ihi,
-				 amrex::IArrayBox* a_bc_jlo,
-				 amrex::IArrayBox* a_bc_jhi,
-				 amrex::IArrayBox* a_bc_klo,
-				 amrex::IArrayBox* a_bc_khi);
+	void set_bcs(amrex::Vector<std::unique_ptr<amrex::IArrayBox>>& a_bc_ilo,
+				 amrex::Vector<std::unique_ptr<amrex::IArrayBox>>& a_bc_ihi,
+				 amrex::Vector<std::unique_ptr<amrex::IArrayBox>>& a_bc_jlo,
+				 amrex::Vector<std::unique_ptr<amrex::IArrayBox>>& a_bc_jhi,
+				 amrex::Vector<std::unique_ptr<amrex::IArrayBox>>& a_bc_klo,
+				 amrex::Vector<std::unique_ptr<amrex::IArrayBox>>& a_bc_khi);
 
 	void apply_projection(amrex::Vector<std::unique_ptr<amrex::MultiFab>>& u,
 						  amrex::Vector<std::unique_ptr<amrex::MultiFab>>& v,
 						  amrex::Vector<std::unique_ptr<amrex::MultiFab>>& w,
-						  const amrex::Vector<std::unique_ptr<amrex::MultiFab>>& ro);
+						  const amrex::Vector<std::unique_ptr<amrex::MultiFab>>& ro, 
+                          amrex::Real time);
 
 	void update_internals();
 
 	void set_velocity_bcs(int lev,
 						  amrex::Vector<std::unique_ptr<amrex::MultiFab>>& u,
 						  amrex::Vector<std::unique_ptr<amrex::MultiFab>>& v,
-						  amrex::Vector<std::unique_ptr<amrex::MultiFab>>& w);
+						  amrex::Vector<std::unique_ptr<amrex::MultiFab>>& w, 
+                          amrex::Real time);
 
 private:
 	// Unit vectors in Cartesian space
@@ -57,14 +59,14 @@ private:
 	amrex::Vector<std::unique_ptr<amrex::EBFArrayBoxFactory>>* m_ebfactory;
 
 	// BCs
-	amrex::IArrayBox* m_bc_ilo;
-	amrex::IArrayBox* m_bc_ihi;
-	amrex::IArrayBox* m_bc_jlo;
-	amrex::IArrayBox* m_bc_jhi;
-	amrex::IArrayBox* m_bc_klo;
-	amrex::IArrayBox* m_bc_khi;
+	amrex::Vector<std::unique_ptr<amrex::IArrayBox>>* m_bc_ilo;
+	amrex::Vector<std::unique_ptr<amrex::IArrayBox>>* m_bc_ihi;
+	amrex::Vector<std::unique_ptr<amrex::IArrayBox>>* m_bc_jlo;
+	amrex::Vector<std::unique_ptr<amrex::IArrayBox>>* m_bc_jhi;
+	amrex::Vector<std::unique_ptr<amrex::IArrayBox>>* m_bc_klo;
+	amrex::Vector<std::unique_ptr<amrex::IArrayBox>>* m_bc_khi;
 
-	amrex::Vector<std::unique_ptr<amrex::MultiFab>> m_diveu;
+	amrex::Vector<std::unique_ptr<amrex::MultiFab>> m_divu;
 	amrex::Vector<std::unique_ptr<amrex::MultiFab>> m_phi;
 	amrex::Vector<amrex::Vector<std::unique_ptr<amrex::MultiFab>>> m_b;
 

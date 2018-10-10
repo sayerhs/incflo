@@ -2,33 +2,34 @@
 #            SIMULATION STOP            #
 #.......................................#
 amr.stop_time           =   -1.         # Max (simulated) time to evolve
-amr.max_step            =   -1          # Max number of time steps
-amr.steady_state        =   1           # Steady-state solver? 
+amr.max_step            =   200         # Max number of time steps
+amr.steady_state        =   0           # Steady-state solver? 
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #         TIME STEP COMPUTATION         #
 #.......................................#
-incflo.fixed_dt         =   -1.         # Use this constant dt if > 0
+incflo.fixed_dt         =   0.01        # Use this constant dt if > 0
 incflo.cfl              =   16.         # CFL factor
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #            INPUT AND OUTPUT           #
 #.......................................#
-amr.plot_int            =    1          # Steps between plot files
+amr.plot_int            =    10         # Steps between plot files
 amr.check_int           =   -1          # Steps between checkpoint files
 amr.restart             =   ""          # Checkpoint to restart from 
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #               PHYSICS                 #
 #.......................................#
-incflo.mu_0             =   1.          # Dynamic viscosity coefficient
-incflo.ro_0             =   1.          # Reference density 
 incflo.gravity          =   0.  0.  0.  # Gravitational force (3D)
+incflo.ro_0             =   1.          # Reference density 
+incflo.mu               =   1.          # Dynamic viscosity coefficient
+incflo.tau_0            =   1.          # Yield stress
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #        ADAPTIVE MESH REFINEMENT       #
 #.......................................#
-amr.n_cell              =   16  16  8   # Grid cells at coarsest AMRlevel
+amr.n_cell              =   32  32  16  # Grid cells at coarsest AMRlevel
 amr.max_level           =   0           # Max AMR level in hierarchy 
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
@@ -48,12 +49,11 @@ cylinder.center         =   1.  1.  1.  # Center
 #          NUMERICAL PARAMETERS         #
 #.......................................#
 incflo.explicit_diffusion = 0           # Explicit viscous diffusion?
-incflo.steady_state_tol   = 1.e-5       # Tolerance for steady-state
+incflo.steady_state_tol   = 1.e-4       # Tolerance for steady-state
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #              VERBOSITY                #
 #.......................................#
-amr.verbose             =   0           # main
 incflo.verbose          =   1           # incflo_level
 mac.verbose             =   0           # MacProjector
 
@@ -61,3 +61,4 @@ mac.verbose             =   0           # MacProjector
 #              DEBUGGING                #
 #.......................................#
 amrex.fpe_trap_invalid  =   0           # Trap NaNs
+fabarray.mfiter_tile_size = 1024 1024 1024

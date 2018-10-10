@@ -3,13 +3,12 @@
 #include <AMReX_EB2_IF_Plane.H>
 #include <AMReX_EB2_IF_Union.H>
 
-#include <eb_if.H>
-
 #include <algorithm>
-#include <eb_F.H>
-#include <incflo_level.H>
+#include <eb_if.H>
+#include <embedded_boundaries_F.H>
+#include <incflo.H>
 
-std::unique_ptr<UnionListIF<EB2::PlaneIF>> incflo_level::get_walls(int lev, bool& has_walls)
+std::unique_ptr<UnionListIF<EB2::PlaneIF>> incflo::get_walls(bool& has_walls)
 {
 	// Extracts all walls from the incflo.dat
 
@@ -41,8 +40,7 @@ std::unique_ptr<UnionListIF<EB2::PlaneIF>> incflo_level::get_walls(int lev, bool
 	return ret;
 }
 
-std::unique_ptr<UnionListIF<EB2::PlaneIF>> incflo_level::get_real_walls(int lev,
-																		bool& has_real_walls)
+std::unique_ptr<UnionListIF<EB2::PlaneIF>> incflo::get_real_walls(bool& has_real_walls)
 {
 	// Extracts all walls from the incflo.dat
 
