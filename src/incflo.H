@@ -207,6 +207,7 @@ private:
 	void incflo_compute_dt(Real time, 
                            Real stop_time, 
                            int steady_state, 
+                           int initialisation, 
                            Real& dt);
 
 	void incflo_compute_ugradu_predictor(Vector<std::unique_ptr<MultiFab>>& conv,
@@ -230,7 +231,6 @@ private:
 
 	void incflo_diffuse_velocity(Real time, Real dt);
 
-    void incflo_apply_forcing_terms(int lev, Real dt, Vector<std::unique_ptr<MultiFab>>& vel);
 	void incflo_compute_velocity_slopes(int lev, Vector<std::unique_ptr<MultiFab>>& vel);
 	void incflo_compute_velocity_at_faces(int lev, Vector<std::unique_ptr<MultiFab>>& vel);
 

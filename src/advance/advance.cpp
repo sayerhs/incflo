@@ -8,7 +8,6 @@
 #include <AMReX_VisMF.H>
 
 #include <incflo.H>
-#include <advance_F.H>
 #include <mac_F.H>
 #include <projection_F.H>
 #include <setup_F.H>
@@ -26,11 +25,10 @@ void incflo::Advance(int nstep,
     if(verbose > 0)
         amrex::Print() << "\n ============   NEW TIME STEP   ============ \n";
 
+    // Extrapolate boundary values for density and volume fraction
     for(int lev = 0; lev < nlev; lev++)
-    {
-        // Extrapolate boundary values for density and volume fraction
         fill_mf_bc(lev, *eta[lev]);
-    }
+   
     // Fill ghost nodes and reimpose boundary conditions
     incflo_set_velocity_bcs(time, 0);
     incflo_set_scalar_bcs();
@@ -42,42 +40,43 @@ void incflo::Advance(int nstep,
     bool proj_2 = true;
 
     // Create temporary multifabs to hold the old-time conv and divtau
-    //    so we don't have to re-compute them in the corrector
+    // so we don't have to re-compute them in the corrector
     Vector<std::unique_ptr<MultiFab>> conv_old;
     Vector<std::unique_ptr<MultiFab>> divtau_old;
-
     conv_old.resize(nlev);
     divtau_old.resize(nlev);
-
     for(int lev = 0; lev < nlev; lev++)
     {
-        conv_old[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, 
-                                         MFInfo(), *ebfactory[lev]));
-        divtau_old[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, 
-                                           MFInfo(), *ebfactory[lev]));
+        conv_old[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, MFInfo(), *ebfactory[lev]));
+        divtau_old[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, MFInfo(), *ebfactory[lev]));
     }
 
 	do
 	{
         // Compute time step size
-		incflo_compute_dt(time, stop_time, steady_state, dt);
+        incflo_compute_dt(time, stop_time, steady_state, 0, dt);
 
-		if(steady_state)
-		{
-            if(verbose > 0)
-                amrex::Print() << "\n   Iteration " << iter << " with dt = " << dt << "\n" << std::endl;
-		}
-		else
-		{
-            if(verbose > 0)
-                amrex::Print() << "\n   Step " << nstep + 1 << ": from old_time " << time
-                               << " to new time " << time + dt << " with dt = " << dt << "\n"
-                               << std::endl;
-		}
+        if(verbose > 0)
+        {
+            if(steady_state)
+            {
+                amrex::Print() << "\n   Iteration " << iter 
+                               << " with dt = " << dt 
+                               << "\n" << std::endl;
+            }
+            else
+            {
+                amrex::Print() << "\n   Step " << nstep + 1 
+                               << ": from old_time " << time 
+                               << " to new time " << time + dt 
+                               << " with dt = " << dt 
+                               << "\n" << std::endl;
+            }
+        }
 
+        // Backup field variables to old
         for(int lev = 0; lev < nlev; lev++)
         {
-            // Backup field variable to old
             MultiFab::Copy(*p_o[lev], *p[lev], 0, 0, p[lev]->nComp(), p_o[lev]->nGrow());
             MultiFab::Copy(*ro_o[lev], *ro[lev], 0, 0, ro[lev]->nComp(), ro_o[lev]->nGrow());
             MultiFab::Copy(*vel_o[lev], *vel[lev], 0, 0, vel[lev]->nComp(), vel_o[lev]->nGrow());
@@ -89,15 +88,11 @@ void incflo::Advance(int nstep,
         {
             amrex::Print() << "\nAfter predictor step:\n";
             for(int lev = 0; lev < nlev; lev++)
-            {
                 incflo_print_max_vel(lev);
-            }
 
             incflo_compute_divu(time + dt);
             for(int lev = 0; lev < nlev; lev++)
-            {
                 amrex::Print() << "max(abs(divu)) = " << incflo_norm0(divu, lev, 0) << "\n";
-            }
         }
 
 		// Corrector step
@@ -106,20 +101,14 @@ void incflo::Advance(int nstep,
         {
             amrex::Print() << "\nAfter corrector step:\n";
             for(int lev = 0; lev < nlev; lev++)
-            {
                 incflo_print_max_vel(lev);
-            }
 
             incflo_compute_divu(time + dt);
             for(int lev = 0; lev < nlev; lev++)
-            {
                 amrex::Print() << "max(abs(divu)) = " << incflo_norm0(divu, lev, 0) << "\n";
-            }
         }
 
-		//
 		// Check whether to exit the loop or not
-		//
 		if(steady_state)
 			keep_looping = !steady_state_reached(dt, iter);
 		else
@@ -134,7 +123,28 @@ void incflo::Advance(int nstep,
 	BL_PROFILE_REGION_STOP("incflo::Advance");
 }
 
-void incflo::incflo_compute_dt(Real time, Real stop_time, int steady_state, Real& dt)
+//
+// Compute new dt by using the formula derived in
+// "A Boundary Condition Capturing Method for Multiphase Incompressible Flow"
+// by Kang et al. (JCP).
+//
+//  dt/2 * ( C+V + sqrt( (C+V)**2 + 4Fx/dx + 4Fy/dy + 4Fz/dz )
+//
+// where
+//
+// C = max(|U|)/dx + max(|V|)/dy + max(|W|)/dz    --> Convection
+//
+// V = 2 * max(eta/ro) * (1/dx^2 + 1/dy^2 +1/dz^2) --> Diffusion
+//
+// Fx, Fy, Fz = net acceleration due to external forces
+//
+// WARNING: We use a slightly modified version of C in the implementation below
+//
+void incflo::incflo_compute_dt(Real time, 
+                               Real stop_time, 
+                               int steady_state, 
+                               int initialisation, 
+                               Real& dt)
 {
 	// DT is always computed even for fixed dt, so we can
 	// issue a warning if fixed dt does not satisfy CFL condition.
@@ -147,7 +157,7 @@ void incflo::incflo_compute_dt(Real time, Real stop_time, int steady_state, Real
 	Real romin = 1.e20;
 	Real etamax = 0.0;
 
-    // We only compute gp0max on the coarsest level because it is the same at all levels
+    // We only compute gp0max on the coarsest level because it is the same at all 
 	Real gp0max[3];
     gp0max[0] = incflo_norm0(gp0, 0, 0);
     gp0max[1] = incflo_norm0(gp0, 0, 1);
@@ -159,27 +169,61 @@ void incflo::incflo_compute_dt(Real time, Real stop_time, int steady_state, Real
         vmax = std::max(vmax, incflo_norm0(vel, lev, 1));
         wmax = std::max(wmax, incflo_norm0(vel, lev, 2));
         romin = std::min(romin, incflo_norm0(ro, lev, 0));
-        // WARNING WARNING: This may cause trouble as we are not doing fully implicit solve!
-        // TODO: revisit
+        // WARNING: This may cause trouble as we are not doing fully implicit solve!
+        // TODO: revisit after testing fully 2/3 dimensional flows
         if(explicit_diffusion)
             etamax = std::max(etamax, incflo_norm0(eta, lev, 0));
     }
 
-    // TODO: move out of unnecessary Fortran routine
-    compute_new_dt(&umax, &vmax, &wmax, 
-                   &romin, &etamax, gp0max,
-				   geom[finest_level].CellSize(),
-				   &cfl,
-				   &steady_state,
-				   &time,
-				   &stop_time,
-				   &dt_new);
+    const Real* dx = geom[finest_level].CellSize();
+    Real idx = 1.0 / dx[0];
+    Real idy = 1.0 / dx[1];
+    Real idz = 1.0 / dx[2];
 
-	if(fixed_dt > 0.)
+    // Convective term
+    Real conv_cfl = umax * idx + vmax * idy + wmax * idz;
+
+    // Viscous term
+    Real diff_cfl = 2.0 * etamax / romin * (idx * idx + idy * idy + idz * idz);
+
+    // Forcing term 
+    Real forc_cfl = abs(gravity[0] - gp0max[0]) * idx 
+                  + abs(gravity[1] - gp0max[1]) * idy  
+                  + abs(gravity[2] - gp0max[2]) * idz;
+
+    // Combined CFL conditioner 
+    Real comb_cfl = conv_cfl + diff_cfl + sqrt(pow(conv_cfl + diff_cfl, 2) + 4.0 * forc_cfl);
+
+    // Update dt
+    dt_new = 2.0 * cfl / comb_cfl;
+
+    // Reduce CFL for initial step
+    if(initialisation)
+        dt_new *= 0.1;
+
+    // Protect against very small comb_cfl
+    // This may happen, for example, when the initial velocity field
+    // is zero for an inviscid flow with no external forcing
+    if(comb_cfl <= 1.0e-18)
+        dt_new = 0.5 * dt;
+
+    // Don't let the timestep grow by more than 1% per step.
+    if(dt > 0.0)
+        dt_new = std::min(dt_new, 1.01*dt);
+
+    // Don't overshoot the final time if not running to steady state
+    if((!steady_state) & (stop_time >= 0.0))
+    {
+        if(time + dt_new > stop_time)
+            dt_new = stop_time - time;
+    }
+
+    // If using fixed time step, check CFL condition and give warning if not satisfied
+	if(fixed_dt > 0.0)
 	{
 		if(dt_new < fixed_dt)
 		{
-			amrex::Print() << "WARNING: fixed_dt does not satisfy CFL condition: "
+			amrex::Print() << "WARNING: fixed_dt does not satisfy CFL condition: \n"
 						   << "max dt by CFL     : " << dt_new << "\n"
 						   << "fixed dt specified: " << fixed_dt << std::endl;
 		}
@@ -236,20 +280,20 @@ void incflo::incflo_apply_predictor(Vector<std::unique_ptr<MultiFab>>& conv_old,
     for(int lev = 0; lev < nlev; lev++)
     {
 
-        // If explicit_diffusion == true  then we compute the full diffusive terms here
-        // If explicit_diffusion == false then we compute only the off-diagonal terms here
+        // explicit_diffusion == true:  compute the full diffusive terms here
+        // explicit_diffusion == false: compute only the off-diagonal terms here
         incflo_compute_divtau(lev, *divtau_old[lev], vel_o);
 
         // First add the convective term
         MultiFab::Saxpy(*vel[lev], dt, *conv_old[lev], 0, 0, 3, 0);
 
         // Add the diffusion terms (either all if explicit_diffusion == true or just
-        // the
-        //    off-diagonal terms if explicit_diffusion == false)
+        // the off-diagonal terms if explicit_diffusion == false)
         MultiFab::Saxpy(*vel[lev], dt, *divtau_old[lev], 0, 0, 3, 0);
 
         // Add the forcing terms
-        incflo_apply_forcing_terms(lev, dt, vel);
+        for(int n = 0; n < 3; n++)
+            (*vel[lev]).plus(dt * gravity[n], n, 1, 0);
 
         // Convert velocities to momenta
         for(int n = 0; n < 3; n++)
@@ -346,8 +390,9 @@ void incflo::incflo_apply_corrector(Vector<std::unique_ptr<MultiFab>>& conv_old,
         MultiFab::Saxpy(*vel[lev], dt / 2.0, *divtau[lev], 0, 0, 3, 0);
         MultiFab::Saxpy(*vel[lev], dt / 2.0, *divtau_old[lev], 0, 0, 3, 0);
 
-        // Add forcing terms
-        incflo_apply_forcing_terms(lev, dt, vel);
+        // Add gravity
+        for(int n = 0; n < 3; n++)
+            (*vel[lev]).plus(dt * gravity[n], n, 1, 0);
 
         // Convert velocities to momenta
         for(int n = 0; n < 3; n++)
@@ -373,31 +418,18 @@ void incflo::incflo_apply_corrector(Vector<std::unique_ptr<MultiFab>>& conv_old,
 	incflo_set_velocity_bcs(new_time, 0);
 }
 
-void incflo::incflo_apply_forcing_terms(int lev,
-                                        amrex::Real dt,
-                                        Vector<std::unique_ptr<MultiFab>>& vel)
-{
-	BL_PROFILE("incflo::incflo_apply_forcing_terms");
-
-	Box domain(geom[lev].Domain());
-
-#ifdef _OPENMP
-#pragma omp parallel
-#endif
-	for(MFIter mfi(*vel[lev], true); mfi.isValid(); ++mfi)
-	{
-		// Tilebox
-		Box bx = mfi.tilebox();
-        add_forcing(BL_TO_FORTRAN_BOX(bx), BL_TO_FORTRAN_ANYD((*vel[lev])[mfi]), &dt);
-	}
-}
-
 //
 // Check if steady state has been reached by verifying that
 //
-//      max(abs( u^(n+1) - u^(n) )) < tol * dt
-//      max(abs( v^(n+1) - v^(n) )) < tol * dt
-//      max(abs( w^(n+1) - w^(n) )) < tol * dt
+//      max(abs( u^(n+1) - u^(n) )) / dt < tol
+//      max(abs( v^(n+1) - v^(n) )) / dt < tol
+//      max(abs( w^(n+1) - w^(n) )) / dt < tol
+//
+//      OR 
+//
+//      sum(abs( u^(n+1) - u^(n) )) / sum(abs( u^(n) )) < tol
+//      sum(abs( v^(n+1) - v^(n) )) / sum(abs( v^(n) )) < tol
+//      sum(abs( w^(n+1) - w^(n) )) / sum(abs( w^(n) )) < tol
 //
 int incflo::steady_state_reached(Real dt, int iter)
 {
@@ -411,66 +443,33 @@ int incflo::steady_state_reached(Real dt, int iter)
     for(int lev = 0; lev < nlev; lev++)
     {
         // Use temporaries to store the difference between current and previous solution
-        MultiFab temp_vel(vel[lev]->boxArray(), vel[lev]->DistributionMap(), 3, 0);
-        MultiFab::LinComb(temp_vel, 1.0, *vel[lev], 0, -1.0, *vel_o[lev], 0, 0, 3, 0);
+        MultiFab diff_vel(vel[lev]->boxArray(), vel[lev]->DistributionMap(), 3, 0);
+        MultiFab::LinComb(diff_vel, 1.0, *vel[lev], 0, -1.0, *vel_o[lev], 0, 0, 3, 0);
 
-        MultiFab tmp;
-        tmp.define(grids[lev], dmap[lev], 1, 0);
-        MultiFab::LinComb(tmp, 1.0, *p[lev], 0, -1.0, *p_o[lev], 0, 0, 1, 0);
+        Real max_change = 0.0;
+        Real max_relchange = 0.0;
+        // Loop over components, only need to check the largest one
+        for(int i = 0; i < 3; i++)
+        {
+            // max(abs(u^{n+1}-u^n))
+            max_change = std::max(max_change, incflo_norm0(diff_vel, lev, i));
+            
+            // sum(abs(u^{n+1}-u^n)) / sum(abs(u^n))
+            Real norm1_diff = incflo_norm1(diff_vel, lev, i);
+            Real norm1_old = incflo_norm1(vel_o, lev, i);
+            Real relchange = norm1_old > 1.0e-15 ? norm1_diff / norm1_old : 0.0;
+            max_relchange = std::max(max_relchange, relchange);
+        }
 
-        Real delta_u = incflo_norm0(temp_vel, lev, 0);
-        Real delta_v = incflo_norm0(temp_vel, lev, 1);
-        Real delta_w = incflo_norm0(temp_vel, lev, 2);
-        Real delta_p = incflo_norm0(tmp, lev, 0);
-
-        Real tol = steady_state_tol;
-
-        condition1[lev] = (delta_u < tol * dt) && (delta_v < tol * dt) && (delta_w < tol * dt);
-
-        // Second stop condition
-        Real du_n1 = incflo_norm1(temp_vel, lev, 0);
-        Real dv_n1 = incflo_norm1(temp_vel, lev, 1);
-        Real dw_n1 = incflo_norm1(temp_vel, lev, 2);
-        Real dp_n1 = incflo_norm1(tmp, lev, 0);
-        Real uo_n1 = incflo_norm1(vel_o, lev, 0);
-        Real vo_n1 = incflo_norm1(vel_o, lev, 1);
-        Real wo_n1 = incflo_norm1(vel_o, lev, 2);
-        Real po_n1 = incflo_norm1(p_o, lev, 0);
-
-        Real tmp1, tmp2, tmp3, tmp4;
-
-        Real local_tol = 1.0e-8;
-
-        if(uo_n1 < local_tol)
-            tmp1 = 0.0;
-        else
-            tmp1 = du_n1 / uo_n1;
-
-        if(vo_n1 < local_tol)
-            tmp2 = 0.0;
-        else
-            tmp2 = dv_n1 / vo_n1;
-
-        if(wo_n1 < local_tol)
-            tmp3 = 0.0;
-        else
-            tmp3 = dw_n1 / wo_n1;
-
-        if(po_n1 < local_tol)
-            tmp4 = 0.0;
-        else
-            tmp4 = dp_n1 / po_n1;
-
-        condition2[lev] = (tmp1 < tol) && (tmp2 < tol) && (tmp3 < tol); // && (tmp4 < tol);
+        condition1[lev] = (max_change < steady_state_tol * dt);
+        condition2[lev] = (max_relchange < steady_state_tol);
 
         // Print out info on steady state checks
         if(verbose > 0)
         {
             amrex::Print() << "\nSteady state check:\n";
-            amrex::Print() << "||u-uo||/||uo|| , du/dt  = " << tmp1 << " , " << delta_u/dt << "\n";
-            amrex::Print() << "||v-vo||/||vo|| , dv/dt  = " << tmp2 << " , " << delta_v/dt << "\n";
-            amrex::Print() << "||w-wo||/||wo|| , dw/dt  = " << tmp3 << " , " << delta_w/dt << "\n";
-            amrex::Print() << "||p-po||/||po|| , dp/dt  = " << tmp4 << " , " << delta_p/dt << "\n";
+            amrex::Print() << "||u-uo||/||uo|| = " << max_relchange 
+                           << ", du/dt  = " << max_change/dt << std::endl;
         }
     }
 
