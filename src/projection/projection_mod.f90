@@ -14,7 +14,6 @@ module projection_mod
    private
 
 contains
-
    !
    ! Set the boundary condition for Pressure Poisson Equation (PPE)
    !

@@ -56,7 +56,7 @@
 ! Local variables
 !-----------------------------------------------
          ! indices
-         integer :: i, j, k, icv, bcv
+         integer :: i, j, k, ibc, jbc, kbc, icv, bcv
          integer :: nlft, nbot, ndwn, nrgt, ntop, nup
 
          ! Gas pressure at the axial location j
@@ -75,7 +75,7 @@
             if (ic_defined(icv)) then
                if ( delp_dir .ge. 0 ) then
                   if (.not. is_defined(ic_p(icv))) then
-                     print *,'MUST DEFINE ic_p if using the DELP pressure condition'
+                     print *,'MUST DEFINE ic_p if using DELP condition'
                      stop
                   end if
                   pj = ic_p(icv)
@@ -96,12 +96,12 @@
          ! section would be skipped)
          block
 
-            !  This hack allows to set the IC pressure  at L-dx/2 
+            !  This hack allows to set the IC pressure  at L-dx/2
             !  -> reference value for pressure, AKA IC_P_G,
             !  is set at the last cell center location.
             real(ar) :: offset
 
-            offset = 0.0_ar
+            offset = - 0.5_ar
 
             if (abs(delp_x) > epsilon(zero)) then
                dpodx = delp_x/xlength
@@ -205,7 +205,7 @@
                enddo
             endif
 
-            gp0(glo(1):ghi(1),glo(2):ghi(2),glo(3):ghi(3),2)  = ro_0 * gravity(1)
+            gp0(glo(1):ghi(1),glo(2):ghi(2),glo(3):ghi(3),2)  = ro_0 * gravity(2)
 
          else if (abs(gravity(3)) > epsilon(0.0d0)) then
 
@@ -225,7 +225,7 @@
                enddo
             endif
 
-            gp0(glo(1):ghi(1),glo(2):ghi(2),glo(3):ghi(3),3)  = ro_0 * gravity(1)
+            gp0(glo(1):ghi(1),glo(2):ghi(2),glo(3):ghi(3),3)  = ro_0 * gravity(3)
 
          endif
 
@@ -238,7 +238,7 @@
          block
             integer offset
 
-            offset = 0
+            offset = 1
 
             nlft = max(0,domlo(1)-slo(1)+offset)
             nbot = max(0,domlo(2)-slo(2)+offset)
@@ -253,17 +253,17 @@
             do k=slo(3),shi(3)
                do j=slo(2),shi(2)
 
-                  select case ( bct_ilo(j,k,1) )
+                  kbc = k
+                  jbc = j
+                  if (k .gt. domhi(3)+ng) kbc = kbc - 1
+                  if (j .gt. domhi(2)+ng) jbc = jbc - 1
+                  
+                  select case ( bct_ilo(jbc,kbc,1) )
 
                   case (pinf_, pout_)
 
-                     bcv = bct_ilo(j,k,2)
-                     p0(slo(1):domlo(1)-1,j,k) = bc_p(bcv)
-
-                  case (minf_)
-
-                     p0(slo(1):domlo(1)-1,j,k) = &
-                     2.d0 * p0(domlo(1),j,k) - p0(domlo(1)+1,j,k)
+                     bcv = bct_ilo(jbc,kbc,2)
+                     p0(slo(1):domlo(1)  ,j,k) = bc_p(bcv)
 
                   end select
                end do
@@ -274,17 +274,17 @@
             do k=slo(3),shi(3)
                do j=slo(2),shi(2)
 
-                  select case ( bct_ihi(j,k,1) )
+                  kbc = k
+                  jbc = j
+                  if (k .gt. domhi(3)+ng) kbc = kbc - 1
+                  if (j .gt. domhi(2)+ng) jbc = jbc - 1
+                  
+                  select case ( bct_ihi(jbc,kbc,1) )
 
                   case (pinf_, pout_)
 
-                     bcv = bct_ihi(j,k,2)
+                     bcv = bct_ihi(jbc,kbc,2)
                      p0(domhi(1)+1:shi(1),j,k) = bc_p(bcv)
-
-                  case (minf_)
-
-                     p0(domhi(1)+1:shi(1),j,k) = &
-                     2.d0 * p0(domhi(1),j,k) - p0(domhi(1)-1,j,k)
 
                   end select
                end do
@@ -295,17 +295,17 @@
             do k=slo(3),shi(3)
                do i=slo(1),shi(1)
 
-                  select case ( bct_jlo(i,k,1) )
+                  kbc = k
+                  ibc = i
+                  if (k .gt. domhi(3)+ng) kbc = kbc - 1
+                  if (i .gt. domhi(1)+ng) ibc = ibc - 1
+                  
+                  select case ( bct_jlo(ibc,kbc,1) )
 
                   case (pinf_, pout_)
 
-                     bcv = bct_jlo(i,k,2)
-                     p0(i,slo(2):domlo(2)-1,k) = bc_p(bcv)
-
-                  case (minf_)
-
-                     p0(i,slo(2):domlo(2)-1,k) = &
-                     2.d0 * p0(i,domlo(2),k) - p0(i,domlo(2)+1,k)
+                     bcv = bct_jlo(ibc,kbc,2)
+                     p0(i,slo(2):domlo(2)  ,k) = bc_p(bcv)
 
                   end select
                end do
@@ -316,17 +316,17 @@
             do k = slo(3),shi(3)
                do i = slo(1),shi(1)
 
-                  select case ( bct_jhi(i,k,1) )
+                  kbc = k
+                  ibc = i
+                  if (k .gt. domhi(3)+ng) kbc = kbc - 1
+                  if (i .gt. domhi(1)+ng) ibc = ibc - 1
+                  
+                  select case ( bct_jhi(ibc,kbc,1) )
 
                   case (pinf_, pout_)
 
-                     bcv = bct_jhi(i,k,2)
+                     bcv = bct_jhi(ibc,kbc,2)
                      p0(i,domhi(2)+1:shi(2),k) = bc_p(bcv)
-
-                  case (minf_)
-
-                     p0(i,domhi(2)+1:shi(2),k) = &
-                     2.d0 * p0(i,domhi(2),k) - p0(i,domhi(2)-1,k)
 
                   end select
                end do
@@ -337,17 +337,17 @@
             do j=slo(2),shi(2)
                do i=slo(1),shi(1)
 
-                  select case ( bct_klo(i,j,1) )
+                  jbc = j
+                  ibc = i
+                  if (j .gt. domhi(2)+ng) jbc = jbc - 1
+                  if (i .gt. domhi(1)+ng) ibc = ibc - 1
+                  
+                  select case ( bct_klo(ibc,jbc,1) )
 
                   case (pinf_, pout_)
 
-                     bcv = bct_klo(i,j,2)
-                     p0(i,j,slo(3):domlo(3)-1) = bc_p(bcv)
-
-                  case (minf_)
-
-                     p0(i,j,slo(3):domlo(3)-1) = &
-                     2.d0 * p0(i,j,domlo(3)) - p0(i,j,domlo(3)+1)
+                     bcv = bct_klo(ibc,jbc,2)
+                     p0(i,j,slo(3):domlo(3)  ) = bc_p(bcv)
 
                   end select
                end do
@@ -358,17 +358,17 @@
             do j=slo(2),shi(2)
                do i=slo(1),shi(1)
 
-                  select case ( bct_khi(i,j,1) )
+                  jbc = j
+                  ibc = i
+                  if (j .gt. domhi(2)+ng) jbc = jbc - 1
+                  if (i .gt. domhi(1)+ng) ibc = ibc - 1
+                  
+                  select case ( bct_khi(ibc,jbc,1) )
 
                   case (pinf_, pout_)
 
-                     bcv = bct_khi(i,j,2)
+                     bcv = bct_khi(ibc,jbc,2)
                      p0(i,j,domhi(3)+1:shi(3)) = bc_p(bcv)
-
-                  case (minf_)
-
-                     p0(i,j,domhi(3)+1:shi(3)) = &
-                     2.d0 * p0(i,j,domhi(3)) - p0(i,j,domhi(3)-1)
 
                   end select
                end do
