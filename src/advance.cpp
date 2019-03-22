@@ -12,6 +12,8 @@
 #include <projection_F.H>
 #include <setup_F.H>
 
+#include <limits>
+
 void incflo::Advance()
 {
 	BL_PROFILE("incflo::Advance");
@@ -25,29 +27,19 @@ void incflo::Advance()
     }
 
     // Fill ghost nodes and reimpose boundary conditions
-    for(int lev = 0; lev <= finest_level; lev++)
-    {
-        FillScalarBC(lev, *ro[lev]);
-        FillScalarBC(lev, *eta[lev]);
-    }
+    FillScalarBC();
     FillVelocityBC(cur_time, 0);
-
-    // Create temporary multifabs to hold the old-time conv and divtau
-    // so we don't have to re-compute them in the corrector
-    // TODO: Make this smarter -- actually shouldn't need separate implementatino of applyinf pred corr
-    Vector<std::unique_ptr<MultiFab>> conv_old;
-    Vector<std::unique_ptr<MultiFab>> divtau_old;
-    conv_old.resize(finest_level + 1);
-    divtau_old.resize(finest_level + 1);
-    for(int lev = 0; lev <= finest_level; lev++)
-    {
-        conv_old[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, MFInfo(), *ebfactory[lev]));
-        divtau_old[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, MFInfo(), *ebfactory[lev]));
-    }
 
     // Compute time step size
     int initialisation = 0;
     ComputeDt(initialisation);
+
+    // Set new and old time to correctly use in fillpatching
+    for(int lev = 0; lev <= finest_level; lev++)
+    {
+        t_old[lev] = cur_time; 
+        t_new[lev] = cur_time + dt; 
+    }
 
     if(incflo_verbose > 0)
     {
@@ -63,11 +55,15 @@ void incflo::Advance()
         MultiFab::Copy(*vel_o[lev], *vel[lev], 0, 0, vel[lev]->nComp(), vel_o[lev]->nGrow());
     }
 
-    // Predictor step
-    ApplyPredictor(conv_old, divtau_old);
+    ApplyPredictor();
 
-    // Corrector step
-    ApplyCorrector(conv_old, divtau_old);
+    ApplyCorrector();
+
+    if(incflo_verbose > 1)
+    {
+        amrex::Print() << "End of time step: " << std::endl;
+        PrintMaxValues(cur_time + dt);
+    }
 
     // Stop timing current time step
     Real end_step = ParallelDescriptor::second() - strt_step;
@@ -101,35 +97,20 @@ void incflo::ComputeDt(int initialisation)
 {
 	BL_PROFILE("incflo::ComputeDt");
 
-	// DT is always computed even for fixed dt, so we can
-	// issue a warning if fixed dt does not satisfy CFL condition.
-	Real dt_new = dt;
-
 	// Compute dt for this time step
-	Real umax = -1.e20;
-	Real vmax = -1.e20;
-	Real wmax = -1.e20;
+	Real umax = 0.0;
+	Real vmax = 0.0;
+	Real wmax = 0.0;
 	Real romin = 1.e20;
 	Real etamax = 0.0;
 
-    // We only compute gp0max on the coarsest level because it is the same at all
-	Real gp0max[3];
-    gp0max[0] = Norm(gp0, 0, 0, 0);
-    gp0max[1] = Norm(gp0, 0, 1, 0);
-    gp0max[2] = Norm(gp0, 0, 2, 0);
-
     for(int lev = 0; lev <= finest_level; lev++)
     {
-        umax = amrex::max(umax, Norm(vel, lev, 0, 0));
-        vmax = amrex::max(vmax, Norm(vel, lev, 1, 0));
-        wmax = amrex::max(wmax, Norm(vel, lev, 2, 0));
-        romin = amrex::min(romin, Norm(ro, lev, 0, 0));
-        // WARNING: This may cause trouble as we are not doing fully implicit solve!
-        // TODO: revisit after testing fully 2/3 dimensional flows
-        if(explicit_diffusion)
-        {
-            etamax = amrex::max(etamax, Norm(eta, lev, 0, 0));
-        }
+        umax   = amrex::max(umax,   Norm(vel, lev, 0, 0));
+        vmax   = amrex::max(vmax,   Norm(vel, lev, 1, 0));
+        wmax   = amrex::max(wmax,   Norm(vel, lev, 2, 0));
+        romin  = amrex::min(romin,  Norm( ro, lev, 0, 0));
+        etamax = amrex::max(etamax, Norm(eta, lev, 0, 0));
     }
 
     const Real* dx = geom[finest_level].CellSize();
@@ -138,21 +119,21 @@ void incflo::ComputeDt(int initialisation)
     Real idz = 1.0 / dx[2];
 
     // Convective term
-    Real conv_cfl = umax * idx + vmax * idy + wmax * idz;
+    Real conv_cfl = std::max(std::max(umax * idx, vmax * idy), wmax * idz);
 
     // Viscous term
     Real diff_cfl = 2.0 * etamax / romin * (idx * idx + idy * idy + idz * idz);
 
     // Forcing term
-    Real forc_cfl = std::abs(gravity[0] - gp0max[0]) * idx
-                  + std::abs(gravity[1] - gp0max[1]) * idy
-                  + std::abs(gravity[2] - gp0max[2]) * idz;
+    Real forc_cfl = std::abs(gravity[0] - std::abs(gp0[0])) * idx
+                  + std::abs(gravity[1] - std::abs(gp0[1])) * idy
+                  + std::abs(gravity[2] - std::abs(gp0[2])) * idz;
 
     // Combined CFL conditioner
     Real comb_cfl = conv_cfl + diff_cfl + sqrt(pow(conv_cfl + diff_cfl, 2) + 4.0 * forc_cfl);
 
     // Update dt
-    dt_new = 2.0 * cfl / comb_cfl;
+    Real dt_new = 2.0 * cfl / comb_cfl;
 
     // Reduce CFL for initial step
     if(initialisation)
@@ -163,24 +144,38 @@ void incflo::ComputeDt(int initialisation)
     // Protect against very small comb_cfl
     // This may happen, for example, when the initial velocity field
     // is zero for an inviscid flow with no external forcing
-    if(comb_cfl <= 1.0e-18)
+    Real eps = std::numeric_limits<Real>::epsilon();
+    if(comb_cfl <= eps)
     {
         dt_new = 0.5 * dt;
     }
 
     // Don't let the timestep grow by more than 10% per step.
-    if(dt > 0.0)
+    if(dt > 0.0 && last_plt != nstep)
     {
         dt_new = amrex::min(dt_new, 1.1 * dt);
     }
+    
+    // Don't overshoot specified plot times
+    if(plot_per > 0.0 && 
+            (trunc((cur_time + dt_new + eps) / plot_per) > trunc((cur_time + eps) / plot_per)))
+    {
+        dt_new = trunc((cur_time + dt_new) / plot_per) * plot_per - cur_time;
+    }
 
     // Don't overshoot the final time if not running to steady state
-    if((!steady_state) & (stop_time > 0.0))
+    if(!steady_state && stop_time > 0.0)
     {
         if(cur_time + dt_new > stop_time)
         {
             dt_new = stop_time - cur_time;
         }
+    }
+
+    // Make sure the timestep is not set to zero after a plot_per stop
+    if(dt_new < eps)
+    {
+        dt_new = 0.5 * dt;
     }
 
     // If using fixed time step, check CFL condition and give warning if not satisfied
@@ -202,10 +197,11 @@ void incflo::ComputeDt(int initialisation)
 
 //
 // Compute predictor:
+// TODO: update documentation
 //
 //  1. Compute
 //
-//     vel = vel_o + dt * R_u^n + dt * divtau*(1/ro)
+//     vel = vel_o + dt * (conv^n + dt * divtau^n / ro)
 //
 //  2. Add explicit forcing term ( AKA gravity, lagged pressure gradient)
 //
@@ -227,18 +223,26 @@ void incflo::ComputeDt(int initialisation)
 //
 //     p = phi
 //
-void incflo::ApplyPredictor(Vector<std::unique_ptr<MultiFab>>& conv_old,
-                                    Vector<std::unique_ptr<MultiFab>>& divtau_old)
+void incflo::ApplyPredictor()
 {
 	BL_PROFILE("incflo::ApplyPredictor");
 
     // We use the new ime value for things computed on the "*" state
     Real new_time = cur_time + dt;
 
-    // Compute the explicit advective term R_u^n
+    if(incflo_verbose > 2)
+    {
+        amrex::Print() << "Before predictor step:" << std::endl;
+        PrintMaxValues(new_time);
+    }
+
+    // Compute the explicit advective term (NB: actually returns MINUS u grad(u) )
     ComputeUGradU(conv_old, vel_o, cur_time);
 
     UpdateDerivedQuantities();
+
+    // TODO: remove
+    FillVelocityBC(new_time, 0);
 
     for(int lev = 0; lev <= finest_level; lev++)
     {
@@ -267,7 +271,10 @@ void incflo::ApplyPredictor(Vector<std::unique_ptr<MultiFab>>& conv_old,
 
         // Add (-dt grad p to momenta)
         MultiFab::Saxpy(*vel[lev], -dt, *gp[lev], 0, 0, 3, vel[lev]->nGrow());
-        MultiFab::Saxpy(*vel[lev], -dt, *gp0[lev], 0, 0, 3, vel[lev]->nGrow());
+        for(int dir = 0; dir < 3; dir++)
+        {
+            (*vel[lev]).plus(-dt * gp0[dir], dir, 1, 0);
+        }
 
         // Convert momenta back to velocities
         for(int dir = 0; dir < 3; dir++)
@@ -276,17 +283,24 @@ void incflo::ApplyPredictor(Vector<std::unique_ptr<MultiFab>>& conv_old,
         }
     }
 
+    // TODO: remove
+    FillVelocityBC(new_time, 0);
+
     // If doing implicit diffusion, solve here for u^*
     if(!explicit_diffusion)
     {
-        DiffuseVelocity(new_time);
+        diffusion_equation->solve(vel, ro, eta, dt);
+        // TODO: remove
+        FillVelocityBC(new_time, 0);
     }
 
 	// Project velocity field
 	ApplyProjection(new_time, dt);
+
+    // Fill BCs for velocity
 	FillVelocityBC(new_time, 0);
 
-    if(incflo_verbose > 1)
+    if(incflo_verbose > 2)
     {
         amrex::Print() << "After predictor step:" << std::endl;
         PrintMaxValues(new_time);
@@ -323,25 +337,20 @@ void incflo::ApplyPredictor(Vector<std::unique_ptr<MultiFab>>& conv_old,
 //
 //     p = phi
 //
-void incflo::ApplyCorrector(Vector<std::unique_ptr<MultiFab>>& conv_old,
-                                    Vector<std::unique_ptr<MultiFab>>& divtau_old)
+void incflo::ApplyCorrector()
 {
 	BL_PROFILE("incflo::ApplyCorrector");
 
     // We use the new time value for things computed on the "*" state
     Real new_time = cur_time + dt;
 
-	Vector<std::unique_ptr<MultiFab>> conv;
-	Vector<std::unique_ptr<MultiFab>> divtau;
-    conv.resize(finest_level + 1);
-    divtau.resize(finest_level + 1);
-    for(int lev = 0; lev <= finest_level; lev++)
+    if(incflo_verbose > 2)
     {
-        conv[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, MFInfo(), *ebfactory[lev]));
-        divtau[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, MFInfo(), *ebfactory[lev]));
+        amrex::Print() << "Before corrector step:" << std::endl;
+        PrintMaxValues(new_time);
     }
 
-    // Compute the explicit advective term R_u^*
+    // Compute the explicit advective term (NB: actually returns MINUS u grad(u) )
     ComputeUGradU(conv, vel, new_time);
 
     UpdateDerivedQuantities();
@@ -376,7 +385,10 @@ void incflo::ApplyCorrector(Vector<std::unique_ptr<MultiFab>>& conv_old,
 
         // Add (-dt grad p to momenta)
         MultiFab::Saxpy(*vel[lev], -dt, *gp[lev], 0, 0, 3, vel[lev]->nGrow());
-        MultiFab::Saxpy(*vel[lev], -dt, *gp0[lev], 0, 0, 3, vel[lev]->nGrow());
+        for(int dir = 0; dir < 3; dir++)
+        {
+            (*vel[lev]).plus(-dt * gp0[dir], dir, 1, 0);
+        }
 
         // Convert momenta back to velocities
         for(int dir = 0; dir < 3; dir++)
@@ -384,18 +396,24 @@ void incflo::ApplyCorrector(Vector<std::unique_ptr<MultiFab>>& conv_old,
             MultiFab::Divide(*vel[lev], (*ro[lev]), 0, dir, 1, vel[lev]->nGrow());
         }
     }
+    // TODO: remove
+    FillVelocityBC(new_time, 0);
 
     // If doing implicit diffusion, solve here for u^*
     if(!explicit_diffusion)
     {
-        DiffuseVelocity(new_time);
+        diffusion_equation->solve(vel, ro, eta, dt);
+        // TODO: remove
+        FillVelocityBC(new_time, 0);
     }
 
 	// Project velocity field
 	ApplyProjection(new_time, dt);
+
+    // Fill velocity BCs again
 	FillVelocityBC(new_time, 0);
 
-    if(incflo_verbose > 1)
+    if(incflo_verbose > 2)
     {
         amrex::Print() << "After corrector step:" << std::endl;
         PrintMaxValues(new_time);
@@ -442,6 +460,7 @@ bool incflo::SteadyStateReached()
             max_change = amrex::max(max_change, Norm(diff_vel, lev, i, 0));
 
             // sum(abs(u^{n+1}-u^n)) / sum(abs(u^n))
+            // TODO: this gives zero often, check for bug
             Real norm1_diff = Norm(diff_vel, lev, i, 1);
             Real norm1_old = Norm(vel_o, lev, i, 1);
             Real relchange = norm1_old > 1.0e-15 ? norm1_diff / norm1_old : 0.0;
@@ -454,7 +473,7 @@ bool incflo::SteadyStateReached()
         // Print out info on steady state checks
         if(incflo_verbose > 0)
         {
-            amrex::Print() << "\nSteady state check:\n";
+            amrex::Print() << "\nSteady state check level " << lev << std::endl; 
             amrex::Print() << "||u-uo||/||uo|| = " << max_relchange
                            << ", du/dt  = " << max_change/dt << std::endl;
         }

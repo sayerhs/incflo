@@ -30,6 +30,7 @@ void incflo::ReadParameters()
 
 		pp.query("plot_file", plot_file);
 		pp.query("plot_int", plot_int);
+		pp.query("plot_per", plot_per);
 	}
 	{
         // Prefix incflo
@@ -40,11 +41,21 @@ void incflo::ReadParameters()
 		pp.query("fixed_dt", fixed_dt);
 		pp.query("steady_state_tol", steady_state_tol);
 		pp.query("explicit_diffusion", explicit_diffusion);
+        pp.query("initial_iterations", initial_iterations);
+        pp.query("do_initial_proj", do_initial_proj);
 
         // Physics
+		pp.queryarr("delp", delp, 0, 3);
 		pp.queryarr("gravity", gravity, 0, 3);
         pp.query("ro_0", ro_0);
         AMREX_ALWAYS_ASSERT(ro_0 >= 0.0);
+
+        // Initial conditions
+        pp.query("probtype", probtype);
+        pp.query("ic_u", ic_u);
+        pp.query("ic_v", ic_v);
+        pp.query("ic_w", ic_w);
+        pp.query("ic_p", ic_p);
 
         // Fluid properties
         pp.query("mu", mu);
@@ -129,7 +140,10 @@ void incflo::ReadParameters()
         }
 
         // Loads constants given at runtime `inputs` file into the Fortran module "constant"
-        incflo_get_data(gravity.dataPtr(), &ro_0, &mu, &n, &tau_0, &papa_reg, &eta_0);
+        incflo_get_data(delp.dataPtr(), gravity.dataPtr(), &ro_0, &mu, 
+                        &ic_u, &ic_v, &ic_w, &ic_p,
+                        &n, &tau_0, &papa_reg, &eta_0, 
+                        fluid_model.c_str(), fluid_model.size());
 	}
 }
 
@@ -139,7 +153,7 @@ void incflo::PostInit(int restart_flag)
     SetBCTypes();
 
     // Reset MAC projection object
-    mac_projection.reset(new MacProjection(this, nghost, &ebfactory));
+    mac_projection.reset(new MacProjection(this, nghost, &ebfactory, probtype));
     mac_projection->set_bcs(bc_ilo, bc_ihi, bc_jlo, bc_jhi, bc_klo, bc_khi);
 
     poisson_equation.reset(new PoissonEquation(this, &ebfactory, 
@@ -165,18 +179,17 @@ void incflo::PostInit(int restart_flag)
     SetBackgroundPressure();
 
     // Fill boundaries
-    for(int lev = 0; lev <= finest_level; lev++)
-    {
-        FillScalarBC(lev, *ro[lev]);
-        FillScalarBC(lev, *eta[lev]);
-        vel[lev]->FillBoundary(geom[lev].periodicity());
-    }
+    FillScalarBC();
+    FillVelocityBC(cur_time, 0);
+
     // Project the initial velocity field to make it divergence free
     // Perform initial iterations to find pressure distribution
     if(!restart_flag)
     {
-        InitialProjection();
-        InitialIterations();
+        if (do_initial_proj)
+            InitialProjection();
+        if (initial_iterations > 0)
+            InitialIterations();
     }
 }
 
@@ -200,7 +213,6 @@ void incflo::InitFluid()
         {
             const Box& bx = mfi.validbox();
             const Box& sbx = (*ro[lev])[mfi].box();
-
             init_fluid(sbx.loVect(), sbx.hiVect(),
                        bx.loVect(), bx.hiVect(),
                        domain.loVect(), domain.hiVect(),
@@ -209,7 +221,7 @@ void incflo::InitFluid()
                        (*vel[lev])[mfi].dataPtr(),
                        (*eta[lev])[mfi].dataPtr(),
                        &dx, &dy, &dz,
-                       &xlen, &ylen, &zlen);
+                       &xlen, &ylen, &zlen, &probtype);
         }
     }
 }
@@ -267,7 +279,10 @@ void incflo::SetBackgroundPressure()
 	// Here we set a separate periodicity flag for p0 because when we use
 	// pressure drop (delp) boundary conditions we fill all variables *except* p0
 	// periodically
-    if(delp_dir > -1) press_per[delp_dir] = 0;
+    if(delp_dir > -1) 
+    {
+        press_per[delp_dir] = 0;
+    }
 	p0_periodicity = Periodicity(press_per);
 
     for(int lev = 0; lev <= max_level; lev++)
@@ -287,9 +302,8 @@ void incflo::SetBackgroundPressure()
             set_p0(bx.loVect(), bx.hiVect(),
                    domain.loVect(), domain.hiVect(),
                    BL_TO_FORTRAN_ANYD((*p0[lev])[mfi]),
-                   BL_TO_FORTRAN_ANYD((*gp0[lev])[mfi]),
-                   &dx, &dy, &dz,
-                   &xlen, &ylen, &zlen,
+                   &gp0[0],
+                   &dx, &dy, &dz, &xlen, &ylen, &zlen,
                    &delp_dir,
                    bc_ilo[lev]->dataPtr(),
                    bc_ihi[lev]->dataPtr(),
@@ -299,9 +313,7 @@ void incflo::SetBackgroundPressure()
                    bc_khi[lev]->dataPtr(),
                    &nghost);
         }
-
         p0[lev]->FillBoundary(p0_periodicity);
-        gp0[lev]->FillBoundary(p0_periodicity);
     }
 }
 
@@ -321,11 +333,7 @@ void incflo::InitialIterations()
     }
 
     // Fill ghost cells
-    for(int lev = 0; lev <= finest_level; lev++)
-    {
-        FillScalarBC(lev, *ro[lev]);
-        FillScalarBC(lev, *eta[lev]);
-    }
+    FillScalarBC();
     FillVelocityBC(cur_time, 0);
 
     // Copy vel into vel_o
@@ -334,22 +342,11 @@ void incflo::InitialIterations()
         MultiFab::Copy(*vel_o[lev], *vel[lev], 0, 0, vel[lev]->nComp(), vel_o[lev]->nGrow());
     }
 
-	//  Create temporary multifabs to hold conv and divtau
-	Vector<std::unique_ptr<MultiFab>> conv;
-	Vector<std::unique_ptr<MultiFab>> divtau;
-    conv.resize(finest_level + 1);
-    divtau.resize(finest_level + 1);
-    for(int lev = 0; lev <= finest_level; lev++)
-    {
-        conv[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, MFInfo(), *ebfactory[lev]));
-        divtau[lev].reset(new MultiFab(grids[lev], dmap[lev], 3, 0, MFInfo(), *ebfactory[lev]));
-    }
-
-	for(int iter = 0; iter < 3; ++iter)
+	for(int iter = 0; iter < initial_iterations; ++iter)
 	{
         if(incflo_verbose) amrex::Print() << "\n In initial_iterations: iter = " << iter << "\n";
 
-		ApplyPredictor(conv, divtau);
+		ApplyPredictor();
 
         for(int lev = 0; lev <= finest_level; lev++)
         {

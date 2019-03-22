@@ -52,7 +52,8 @@ PoissonEquation::PoissonEquation(AmrCore* _amrcore,
     sigma.resize(max_level + 1);
     for(int lev = 0; lev <= max_level; lev++)
     {
-        sigma[lev].reset(new MultiFab(grids[lev], dmap[lev], 1, nghost));
+        sigma[lev].reset(new MultiFab(grids[lev], dmap[lev], 1, nghost, 
+                                      MFInfo(), *(*ebfactory)[lev]));
     }
 
 	// First define the matrix.
@@ -64,14 +65,15 @@ PoissonEquation::PoissonEquation(AmrCore* _amrcore,
 	LPInfo info;
     matrix.define(geom, grids, dmap, info, GetVecOfConstPtrs(*ebfactory));
 
-    // Set matrix options
     matrix.setGaussSeidel(true);
     matrix.setHarmonicAverage(false);
-    matrix.setCoarseningStrategy(MLNodeLaplacian::CoarseningStrategy::Sigma);
 
 	// LinOpBCType Definitions are in amrex/Src/Boundary/AMReX_LO_BCTYPES.H
-	matrix.setDomainBC({(LinOpBCType) bc_lo[0], (LinOpBCType) bc_lo[1], (LinOpBCType) bc_lo[2]},
-					   {(LinOpBCType) bc_hi[0], (LinOpBCType) bc_hi[1], (LinOpBCType) bc_hi[2]});
+	matrix.setDomainBC
+    (
+        {(LinOpBCType) bc_lo[0], (LinOpBCType) bc_lo[1], (LinOpBCType) bc_lo[2]},
+        {(LinOpBCType) bc_hi[0], (LinOpBCType) bc_hi[1], (LinOpBCType) bc_hi[2]}
+    );
 }
 
 PoissonEquation::~PoissonEquation()

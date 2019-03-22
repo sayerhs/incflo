@@ -18,7 +18,6 @@ incflo::incflo()
     // This needs is needed before initializing level MultiFabs: ebfactories should
     // not change after the eb-dependent MultiFabs are allocated.
     MakeEBGeometry();
-    if(incflo_verbose > 0) WriteEBSurface();
 }
 
 incflo::~incflo(){};
@@ -28,21 +27,26 @@ void incflo::InitData()
     BL_PROFILE("incflo::InitData()");
 
 	// Either init from scratch or from the checkpoint file
+    // In both cases, we call MakeNewLevelFromScratch():
+    // - Set BA and DM 
+    // - Allocate arrays for level
 	int restart_flag = 0;
 	if(restart_file.empty())
 	{
-        // This is an AmrCore member function. 
-        // Importantly, it calls MakeNewLevelFromScratch():
-        // - Set BA and DM 
-        // - Allocate arrays for level
+        // This tells the AmrMesh class not to iterate when creating the initial
+        // grid hierarchy
+        SetIterateToFalse();
+        
+        // This tells the Cluster routine to use the new chopping routine which
+        // rejects cuts if they don't improve the efficiency
+        SetUseNewChop();
+
+        // This is an AmrCore member function which recursively makes new levels
         InitFromScratch(cur_time);
 	}
 	else
 	{
         // Read starting configuration from chk file. 
-        // Importantly, it calls MakeNewLevelFromScratch():
-        // - Set BA and DM 
-        // - Allocate arrays for level
 		ReadCheckpointFile();
 		restart_flag = 1;
 	}
@@ -57,7 +61,7 @@ void incflo::InitData()
 	PostInit(restart_flag);
 
     // Plot initial distribution
-    if(plot_int > 0 and !restart_flag) 
+    if((plot_int > 0 || plot_per > 0) && !restart_flag)
     {
         UpdateDerivedQuantities();
         WritePlotFile();
@@ -65,6 +69,75 @@ void incflo::InitData()
     }
 }
 
+BoxArray incflo::MakeBaseGrids () const
+{
+    BoxArray ba(geom[0].Domain());
+
+    ba.maxSize(max_grid_size[0]);
+
+    // We only call ChopGrids if dividing up the grid using max_grid_size didn't
+    //    create enough grids to have at least one grid per processor.
+    // This option is controlled by "refine_grid_layout" which defaults to true.
+
+    if ( refine_grid_layout &&
+         ba.size() < ParallelDescriptor::NProcs() ){
+        ChopGrids(geom[0].Domain(), ba, ParallelDescriptor::NProcs());
+    }
+
+    if (ba == grids[0]) {
+        ba = grids[0];  // to avoid dupliates
+    }
+    amrex::Print() << "In MakeBaseGrids: BA HAS " << ba.size() << " GRIDS " << std::endl;
+    return ba;
+}
+
+
+void incflo::ChopGrids (const Box& domain, BoxArray& ba, int target_size) const
+{
+    if ( ParallelDescriptor::IOProcessor() )
+       amrex::Warning("Using max_grid_size only did not make enough grids for the number of processors");
+
+    // Here we hard-wire the maximum number of times we divide the boxes.
+    int max_div = 10;
+
+    // Here we hard-wire the minimum size in any one direction the boxes can be
+    int min_grid_size = 4;
+
+    IntVect chunk(domain.length(0),domain.length(1),domain.length(2));
+
+    int j;
+    for (int cnt = 1; cnt <= max_div; ++cnt)
+    {
+        if (chunk[0] >= chunk[1] && chunk[0] >= chunk[2])
+        {
+            j = 0;
+        }
+        else if (chunk[1] >= chunk[0] && chunk[1] >= chunk[2])
+        {
+            j = 1;
+        }
+        else if (chunk[2] >= chunk[0] && chunk[2] >= chunk[1])
+        {
+            j = 2;
+        }
+        chunk[j] /= 2;
+
+        if (chunk[j] >= min_grid_size)
+        {
+            ba.maxSize(chunk);
+        }
+        else
+        {
+            // chunk[j] was the biggest chunk -- if this is too small then we're done
+            if ( ParallelDescriptor::IOProcessor() )
+               amrex::Warning("ChopGrids was unable to make enough grids for the number of processors");
+            return;
+        }
+
+        // Test if we now have enough grids
+        if (ba.size() >= target_size) return;
+    }
+}
 void incflo::Evolve()
 {
     BL_PROFILE("incflo::Evolve()");
@@ -75,7 +148,7 @@ void incflo::Evolve()
     while(!do_not_evolve)
     {
         // TODO: Necessary for dynamic meshing
-        /* if (regrid_int > 0) 
+        /* if (regrid_int > 0)
         {
             // Make sure we don't regrid on max_level
             for (int lev = 0; lev < max_level; ++lev)
@@ -91,13 +164,14 @@ void incflo::Evolve()
         cur_time += dt;
 
         // Write plot and checkpoint files
-        if((plot_int > 0) && (nstep % plot_int == 0))
+        if((plot_int > 0 && (nstep % plot_int == 0)) ||
+           (plot_per > 0 && (std::abs(remainder(cur_time, plot_per)) < 1.e-12)))
         {
             UpdateDerivedQuantities();
             WritePlotFile();
             last_plt = nstep;
         }
-        if((check_int > 0) && (nstep % check_int == 0))
+        if(check_int > 0 && (nstep % check_int == 0))
         {
             WriteCheckPointFile();
             last_chk = nstep;
@@ -105,20 +179,20 @@ void incflo::Evolve()
 
         // Mechanism to terminate incflo normally.
         do_not_evolve = (steady_state && SteadyStateReached()) ||
-                        (((stop_time > 0.) && (cur_time >= stop_time - 1.e-6 * dt)) ||
+                        ((stop_time > 0. && (cur_time >= stop_time - 1.e-12 * dt)) ||
                          (max_step >= 0 && nstep >= max_step));
     }
 
 	// Output at the final time
     if(check_int > 0 && nstep != last_chk) WriteCheckPointFile();
-    if(plot_int > 0 && nstep != last_plt)
+    if((plot_int > 0 || plot_per > 0) && nstep != last_plt)
     {
         UpdateDerivedQuantities();
         WritePlotFile();
     }
 }
 
-// tag all cells for refinement
+// tag cells for refinement
 // overrides the pure virtual function in AmrCore
 void incflo::ErrorEst(int lev,
                       TagBoxArray& tags,
@@ -127,50 +201,42 @@ void incflo::ErrorEst(int lev,
 {
     BL_PROFILE("incflo::ErrorEst()");
 
-    const int clearval = TagBox::CLEAR;
-    const int   tagval = TagBox::SET;
+    const char   tagval = TagBox::SET;
+    const char clearval = TagBox::CLEAR;
+
+    auto const& factory = dynamic_cast<EBFArrayBoxFactory const&>(ro[lev]->Factory());
+    auto const& flags = factory.getMultiEBCellFlagFab();
 
     const Real* dx      = geom[lev].CellSize();
     const Real* prob_lo = geom[lev].ProbLo();
 
-    Vector<int>  itags;
-
+#ifdef _OPENMP
+#pragma omp parallel
+#endif
     for (MFIter mfi(*ro[lev],true); mfi.isValid(); ++mfi)
     {
-        const Box& tilebox  = mfi.tilebox();
-
-        TagBox&     tagfab  = tags[mfi];
-        
-        // We cannot pass tagfab to Fortran becuase it is BaseFab<char>.
-        // So we are going to get a temporary integer array.
-            // set itags initially to 'untagged' everywhere
-            // we define itags over the tilebox region
-        tagfab.get_itags(itags, tilebox);
-        
-            // data pointer and index space
-        int*        tptr    = itags.dataPtr();
-        const int*  tlo     = tilebox.loVect();
-        const int*  thi     = tilebox.hiVect();
+        const Box& bx  = mfi.tilebox();
+        const auto& flag = flags[mfi];
+        const FabType typ = flag.getType(bx);
+        if (typ != FabType::covered)
+        {
+            TagBox&     tagfab  = tags[mfi];
 
             // tag cells for refinement
-        state_error(tptr,  AMREX_ARLIM_3D(tlo), AMREX_ARLIM_3D(thi),
-            BL_TO_FORTRAN_3D((*ro[lev])[mfi]),
-            &tagval, &clearval, 
-            AMREX_ARLIM_3D(tilebox.loVect()), AMREX_ARLIM_3D(tilebox.hiVect()), 
-            AMREX_ZFILL(dx), AMREX_ZFILL(prob_lo), &time);
-        //
-        // Now update the tags in the TagBox in the tilebox region
-            // to be equal to itags
-        //
-        tagfab.tags_and_untags(itags, tilebox);
+            state_error(BL_TO_FORTRAN_BOX(bx), 
+                        BL_TO_FORTRAN_ANYD(tagfab),
+                        BL_TO_FORTRAN_ANYD((ebfactory[lev]->getVolFrac())[mfi]), 
+                        &tagval, &clearval,
+                        AMREX_ZFILL(dx), AMREX_ZFILL(prob_lo), &time);
+        }
     }
-    
-    /* TODO: This is what we want to refine on, but it gives segfault like this
-     * // Refine on cut cells
+
+    refine_cutcells = true;
+    // Refine on cut cells
     if (refine_cutcells) 
     {
         amrex::TagCutCells(tags, *ro[lev]);
-    }*/
+    }
 }
 
 // Make a new level from scratch using provided BoxArray and DistributionMapping.
@@ -184,15 +250,13 @@ void incflo::MakeNewLevelFromScratch(int lev,
     BL_PROFILE("incflo::MakeNewLevelFromScratch()");
 
     if(incflo_verbose > 0)
-    { 
-        amrex::Print() << "Making new level " << lev << std::endl; 
-        amrex::Print() << "with BoxArray " << new_grids << std::endl; 
+    {
+        amrex::Print() << "Making new level " << lev << std::endl;
+        amrex::Print() << "with BoxArray " << new_grids << std::endl;
     }
 
 	SetBoxArray(lev, new_grids);
 	SetDistributionMap(lev, new_dmap);
-
-    if(lev == 0) MakeBCArrays();
 
 	// Allocate the fluid data, NOTE: this depends on the ebfactories.
     AllocateArrays(lev);
@@ -252,12 +316,9 @@ void incflo::AverageDownTo(int crse_lev)
 
     IntVect rr = refRatio(crse_lev);
     amrex::EB_average_down(*ro[crse_lev+1],         *ro[crse_lev],         0, 1, rr);
-    amrex::EB_average_down(*p0[crse_lev+1],         *p0[crse_lev],         0, 1, rr);
-    amrex::EB_average_down(*p[crse_lev+1],          *p[crse_lev],          0, 1, rr);
     amrex::EB_average_down(*eta[crse_lev+1],        *eta[crse_lev],        0, 1, rr);
     amrex::EB_average_down(*strainrate[crse_lev+1], *strainrate[crse_lev], 0, 1, rr);
     amrex::EB_average_down(*vort[crse_lev+1],       *vort[crse_lev],       0, 1, rr);
-    amrex::EB_average_down(*gp0[crse_lev+1],        *gp0[crse_lev],        0, 3, rr);
     amrex::EB_average_down(*gp[crse_lev+1],         *gp[crse_lev],         0, 3, rr);
     amrex::EB_average_down(*vel[crse_lev+1],        *vel[crse_lev],        0, 3, rr);
 }

@@ -1,5 +1,8 @@
 #include <incflo.H>
 
+// TODO: find better way of making the fillpatch stuff work
+void set_ptr_to_incflo(incflo& my_incflo);
+
 int main(int argc, char* argv[])
 {
 	amrex::Initialize(argc, argv);
@@ -16,6 +19,12 @@ int main(int argc, char* argv[])
 
     // Default constructor. Note inheritance: incflo : AmrCore : AmrMesh. 
     incflo my_incflo;
+
+    // Get boundary conditions from inputs file
+    my_incflo.GetInputBCs();
+
+    // Set global static pointer to incflo object. Used by fillpatch utility
+    set_ptr_to_incflo(my_incflo);
 
     // Initialize data, parameters, arrays and derived internals
     my_incflo.InitData();

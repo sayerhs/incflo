@@ -13,13 +13,12 @@ void incflo::UpdateDerivedQuantities()
     ComputeStrainrate();
     ComputeViscosity();
     ComputeVorticity();
-    AverageDown();
 }
 
 void incflo::ComputeDivU(Real time)
 {
     int extrap_dir_bcs = 0;
-    FillVelocityBC (time, extrap_dir_bcs);
+    FillVelocityBC(time, extrap_dir_bcs);
 
     // Define the operator in order to compute the multi-level divergence
     //
@@ -54,32 +53,29 @@ void incflo::ComputeStrainrate()
     {
         Box domain(geom[lev].Domain());
 
-        // Get EB geometric info
-        Array< const MultiCutFab*,AMREX_SPACEDIM> areafrac;
-        Array< const MultiCutFab*,AMREX_SPACEDIM> facecent;
-        const amrex::MultiFab*                    volfrac;
-        const amrex::MultiCutFab*                 bndrycent;
-
-        areafrac  =   ebfactory[lev] -> getAreaFrac();
-        facecent  =   ebfactory[lev] -> getFaceCent();
-        volfrac   = &(ebfactory[lev] -> getVolFrac());
-        bndrycent = &(ebfactory[lev] -> getBndryCent());
+        // State with ghost cells
+        MultiFab Sborder(grids[lev], dmap[lev], vel[lev]->nComp(), nghost, 
+                         MFInfo(), *ebfactory[lev]);
+        FillPatchVel(lev, cur_time, Sborder, 0, Sborder.nComp());
+    
+        // Copy each FAB back from Sborder into the vel array, complete with filled ghost cells
+        MultiFab::Copy(*vel[lev], Sborder, 0, 0, vel[lev]->nComp(), vel[lev]->nGrow());
 
 #ifdef _OPENMP
-#pragma omp parallel
+#pragma omp parallel if (Gpu::notInLaunchRegion())
 #endif
-        for(MFIter mfi(*vel[lev], true); mfi.isValid(); ++mfi)
+        for(MFIter mfi(Sborder, TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
             // Tilebox
             Box bx = mfi.tilebox();
 
             // This is to check efficiently if this tile contains any eb stuff
-            const EBFArrayBox& vel_fab = static_cast<EBFArrayBox const&>((*vel[lev])[mfi]);
+            const EBFArrayBox& vel_fab = static_cast<EBFArrayBox const&>(Sborder[mfi]);
             const EBCellFlagFab& flags = vel_fab.getEBCellFlagFab();
 
             if (flags.getType(bx) == FabType::covered)
             {
-                (*strainrate[lev])[mfi].setVal(1.2345e200, bx, 0, 3);
+                (*strainrate[lev])[mfi].setVal(1.2345e200, bx);
             }
             else
             {
@@ -96,14 +92,6 @@ void incflo::ComputeStrainrate()
                                           BL_TO_FORTRAN_ANYD((*strainrate[lev])[mfi]),
                                           BL_TO_FORTRAN_ANYD((*vel[lev])[mfi]),
                                           BL_TO_FORTRAN_ANYD(flags),
-                                          BL_TO_FORTRAN_ANYD((*areafrac[0])[mfi]),
-                                          BL_TO_FORTRAN_ANYD((*areafrac[1])[mfi]),
-                                          BL_TO_FORTRAN_ANYD((*areafrac[2])[mfi]),
-                                          BL_TO_FORTRAN_ANYD((*facecent[0])[mfi]),
-                                          BL_TO_FORTRAN_ANYD((*facecent[1])[mfi]),
-                                          BL_TO_FORTRAN_ANYD((*facecent[2])[mfi]),
-                                          BL_TO_FORTRAN_ANYD((*volfrac)[mfi]),
-                                          BL_TO_FORTRAN_ANYD((*bndrycent)[mfi]),
                                           geom[lev].CellSize());
                 }
             }
@@ -118,42 +106,55 @@ void incflo::ComputeVorticity()
     for(int lev = 0; lev <= finest_level; lev++)
     {
         Box domain(geom[lev].Domain());
+        Real idx = 1.0 / geom[lev].CellSize()[0];
+        Real idy = 1.0 / geom[lev].CellSize()[1];
+        Real idz = 1.0 / geom[lev].CellSize()[2];
 
-        // Get EB geometric info
-        Array< const MultiCutFab*,AMREX_SPACEDIM> areafrac;
-        Array< const MultiCutFab*,AMREX_SPACEDIM> facecent;
-        const amrex::MultiFab*                    volfrac;
-        const amrex::MultiCutFab*                 bndrycent;
-
-        areafrac  =   ebfactory[lev] -> getAreaFrac();
-        facecent  =   ebfactory[lev] -> getFaceCent();
-        volfrac   = &(ebfactory[lev] -> getVolFrac());
-        bndrycent = &(ebfactory[lev] -> getBndryCent());
+        // State with ghost cells
+        MultiFab Sborder(grids[lev], dmap[lev], vel[lev]->nComp(), nghost, 
+                         MFInfo(), *ebfactory[lev]);
+        FillPatchVel(lev, cur_time, Sborder, 0, Sborder.nComp());
+    
+        // Copy each FAB back from Sborder into the vel array, complete with filled ghost cells
+        MultiFab::Copy (*vel[lev], Sborder, 0, 0, vel[lev]->nComp(), vel[lev]->nGrow());
 
     #ifdef _OPENMP
-    #pragma omp parallel
+    #pragma omp parallel if (Gpu::notInLaunchRegion())
     #endif
-        for(MFIter mfi(*vel[lev], true); mfi.isValid(); ++mfi)
+        for(MFIter mfi(Sborder, TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
             // Tilebox
             Box bx = mfi.tilebox();
 
             // This is to check efficiently if this tile contains any eb stuff
-            const EBFArrayBox& vel_fab = static_cast<EBFArrayBox const&>((*vel[lev])[mfi]);
+            const EBFArrayBox& vel_fab = static_cast<EBFArrayBox const&>(Sborder[mfi]);
             const EBCellFlagFab& flags = vel_fab.getEBCellFlagFab();
 
             if (flags.getType(bx) == FabType::covered)
             {
-                (*vort[lev])[mfi].setVal(1.2345e200, bx, 0, 3);
+                (*vort[lev])[mfi].setVal(1.2345e200, bx);
             }
             else
             {
                 if(flags.getType(amrex::grow(bx, 0)) == FabType::regular)
                 {
-                    compute_vort(BL_TO_FORTRAN_BOX(bx),
-                                 BL_TO_FORTRAN_ANYD((*vort[lev])[mfi]),
-                                 BL_TO_FORTRAN_ANYD((*vel[lev])[mfi]),
-                                 geom[lev].CellSize());
+                    const auto& vel_arr = Sborder.array(mfi);
+                    const auto& vort_arr = vort[lev]->array(mfi);
+
+                    for(int i = bx.smallEnd(0); i <= bx.bigEnd(0); i++)
+                    for(int j = bx.smallEnd(1); j <= bx.bigEnd(1); j++)
+                    for(int k = bx.smallEnd(2); k <= bx.bigEnd(2); k++)
+                    {
+                        Real vx = (vel_arr(i+1, j  , k  , 1) - vel_arr(i-1, j  , k  , 1)) * idx;
+                        Real wx = (vel_arr(i+1, j  , k  , 2) - vel_arr(i-1, j  , k  , 2)) * idx;
+                        Real uy = (vel_arr(i  , j+1, k  , 0) - vel_arr(i  , j-1, k  , 0)) * idy;
+                        Real wy = (vel_arr(i  , j+1, k  , 2) - vel_arr(i  , j-1, k  , 2)) * idy;
+                        Real uz = (vel_arr(i  , j  , k+1, 0) - vel_arr(i  , j  , k-1, 0)) * idz;
+                        Real vz = (vel_arr(i  , j  , k+1, 1) - vel_arr(i  , j  , k-1, 1)) * idz;
+                        
+                        // The factor half is included here instead of in each of the above
+                        vort_arr(i,j,k) = 0.5 * sqrt(pow(wy - vz, 2) + pow(uz - wx, 2) + pow(vx - uy, 2));
+                    }
                 }
                 else
                 {
@@ -161,18 +162,9 @@ void incflo::ComputeVorticity()
                                     BL_TO_FORTRAN_ANYD((*vort[lev])[mfi]),
                                     BL_TO_FORTRAN_ANYD((*vel[lev])[mfi]),
                                     BL_TO_FORTRAN_ANYD(flags),
-                                    BL_TO_FORTRAN_ANYD((*areafrac[0])[mfi]),
-                                    BL_TO_FORTRAN_ANYD((*areafrac[1])[mfi]),
-                                    BL_TO_FORTRAN_ANYD((*areafrac[2])[mfi]),
-                                    BL_TO_FORTRAN_ANYD((*facecent[0])[mfi]),
-                                    BL_TO_FORTRAN_ANYD((*facecent[1])[mfi]),
-                                    BL_TO_FORTRAN_ANYD((*facecent[2])[mfi]),
-                                    BL_TO_FORTRAN_ANYD((*volfrac)[mfi]),
-                                    BL_TO_FORTRAN_ANYD((*bndrycent)[mfi]),
                                     geom[lev].CellSize());
                 }
             }
-
         }
     }
 }

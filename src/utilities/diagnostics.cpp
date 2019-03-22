@@ -8,10 +8,7 @@
 //
 Real incflo::Norm(const Vector<std::unique_ptr<MultiFab>>& mf, int lev, int comp, int norm_type)
 {
-    // TODO: is it necessary to create tmp MF? 
-    // Answer: yes, and it is because arrays allocated without MFInfo and ebfactory get segfaults
-    // if trying to call EB_set_covered. This is true for pressure and pressure gradients. 
-    // TODO: find out why not all MFs are allocated with the EB info...
+    // Make copy of MF so that we can set values in covered cells to zero. 
 	MultiFab mf_tmp(mf[lev]->boxArray(),
 					mf[lev]->DistributionMap(),
                     mf[lev]->nComp(),
@@ -45,6 +42,7 @@ void incflo::PrintMaxValues(Real time)
             PrintMaxVel(lev);
             PrintMaxGp(lev);
         }
+        amrex::Print() << std::endl; 
 }
 
 //
@@ -73,20 +71,34 @@ void incflo::PrintMaxGp(int lev)
 
 void incflo::CheckForNans(int lev)
 {
+	bool ro_has_nans = ro[lev]->contains_nan(0);
 	bool ug_has_nans = vel[lev]->contains_nan(0);
 	bool vg_has_nans = vel[lev]->contains_nan(1);
 	bool wg_has_nans = vel[lev]->contains_nan(2);
 	bool pg_has_nans = p[lev]->contains_nan(0);
 
+	if(ro_has_nans)
+    {
+		amrex::Print() << "WARNING: ro contains NaNs!!!";
+    }
+
 	if(ug_has_nans)
+    {
 		amrex::Print() << "WARNING: u contains NaNs!!!";
+    }
 
 	if(vg_has_nans)
+    {
 		amrex::Print() << "WARNING: v contains NaNs!!!";
+    }
 
 	if(wg_has_nans)
+    {
 		amrex::Print() << "WARNING: w contains NaNs!!!";
+    }
 
 	if(pg_has_nans)
+    {
 		amrex::Print() << "WARNING: p contains NaNs!!!";
+    }
 }

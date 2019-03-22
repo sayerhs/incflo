@@ -1,21 +1,7 @@
 #ifndef MAC_PROJECTION_H_
 #define MAC_PROJECTION_H_
 
-#include <iostream>
-#include <memory>
-
-#ifdef _OPENMP
-#include <omp.h>
-#endif
-
-#include <AMReX.H>
 #include <AMReX_AmrCore.H>
-#include <AMReX_ArrayLim.H>
-#include <AMReX_BLProfiler.H>
-#include <AMReX_IArrayBox.H>
-#include <AMReX_LO_BCTYPES.H>
-#include <AMReX_MultiFab.H>
-#include <AMReX_Vector.H>
 
 #include <constants.H>
 
@@ -24,7 +10,8 @@ class MacProjection
 public:
 	MacProjection(amrex::AmrCore* a_amrcore,
 				  int a_nghost,
-				  amrex::Vector<std::unique_ptr<amrex::EBFArrayBoxFactory>>* a_ebfactory);
+				  amrex::Vector<std::unique_ptr<amrex::EBFArrayBoxFactory>>* a_ebfactory, 
+                  int a_probtype);
 
 	~MacProjection();
 
@@ -39,7 +26,7 @@ public:
 						  amrex::Vector<std::unique_ptr<amrex::MultiFab>>& v,
 						  amrex::Vector<std::unique_ptr<amrex::MultiFab>>& w,
 						  const amrex::Vector<std::unique_ptr<amrex::MultiFab>>& ro, 
-                          amrex::Real time);
+                          amrex::Real time, int steady_state);
 
 	void update_internals();
 
@@ -51,6 +38,7 @@ public:
 
 private:
 	int m_nghost;
+    int m_probtype = 0;
 
 	amrex::AmrCore* m_amrcore;
 	amrex::Vector<std::unique_ptr<amrex::EBFArrayBoxFactory>>* m_ebfactory;
@@ -84,8 +72,6 @@ private:
 	amrex::Real m_mg_atol = 0.0;
 
 	void read_inputs();
-
-	void set_ccmf_bcs(int lev, amrex::MultiFab& mf);
 
 	void compute_b_coeff(const amrex::Vector<std::unique_ptr<amrex::MultiFab>>& u,
 						 const amrex::Vector<std::unique_ptr<amrex::MultiFab>>& v,
