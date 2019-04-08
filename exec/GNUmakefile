@@ -6,6 +6,9 @@ USE_OMP = FALSE
 # Debug mode?
 DEBUG = FALSE
 
+# Use HYPRE solver?
+USE_HYPRE = FALSE
+
 # Profiling
 PROFILE       = FALSE
 TINY_PROFILE  = FALSE
@@ -21,6 +24,7 @@ TINY_PROFILE  = FALSE
 # Path to AMReX directory and incflo directories
 AMREX_HOME ?= ../../amrex
 TOP = ..
+HYPRE_DIR ?= ../../hypre/src/hypre
 
 # Use OS-friendly compiler
 UNAME := $(shell uname)

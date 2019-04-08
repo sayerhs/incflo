@@ -1,5 +1,6 @@
 #include <AMReX_EBFArrayBox.H>
 #include <AMReX_EBMultiFabUtil.H>
+#include <AMReX_MultiFabUtil.H>
 #include <AMReX_ParmParse.H>
 #include <AMReX_Vector.H>
 
@@ -57,7 +58,6 @@ DiffusionEquation::DiffusionEquation(AmrCore* _amrcore,
     rhs.resize(max_level + 1);
     for(int lev = 0; lev <= max_level; lev++)
     {
-        b[lev].resize(3);
         for(int dir = 0; dir < 3; dir++)
         {
             BoxArray edge_ba = grids[lev];
@@ -73,6 +73,7 @@ DiffusionEquation::DiffusionEquation(AmrCore* _amrcore,
 
 	// Define the matrix.
 	LPInfo info;
+    info.setMaxCoarseningLevel(mg_max_coarsening_level);
     matrix.define(geom, grids, dmap, info, GetVecOfConstPtrs(*ebfactory));
 
     // It is essential that we set MaxOrder to 2 if we want to use the standard
@@ -99,9 +100,10 @@ void DiffusionEquation::readParameters()
     pp.query("mg_max_iter", mg_max_iter);
     pp.query("mg_cg_maxiter", mg_cg_maxiter);
     pp.query("mg_max_fmg_iter", mg_max_fmg_iter);
+    pp.query("mg_max_coarsening_level", mg_max_coarsening_level);
     pp.query("mg_rtol", mg_rtol);
     pp.query("mg_atol", mg_atol);
-    pp.query( "bottom_solver_type", bottom_solver_type);
+    pp.query("bottom_solver_type", bottom_solver_type);
 }
 
 void DiffusionEquation::updateInternals(AmrCore* amrcore_in,
@@ -138,26 +140,16 @@ void DiffusionEquation::solve(Vector<std::unique_ptr<MultiFab>>& vel,
     // Set alpha and beta
     matrix.setScalars(1.0, dt);
 
-    // Set the variable coefficients (on faces) to equal the apparent viscosity
+    // Set the spatially varying b coefficients (on faces) to equal the apparent viscosity
     updateCoefficients(eta);
 
     for(int lev = 0; lev <= amrcore->finestLevel(); lev++)
     {
-        // This sets the spatially varying a coefficients
+        // This sets the coefficients
         matrix.setACoeffs(lev, (*ro[lev]));
+        matrix.setBCoeffs(lev, GetArrOfConstPtrs(b[lev])); 
 
-        // Copy the spatially varying b coefficients into the proper data strutcure
-        Vector<const MultiFab*> tmp = GetVecOfConstPtrs(b[lev]);
-        std::array<MultiFab const*, AMREX_SPACEDIM> b_tmp;
-        for(int dir = 0; dir < 3; dir++)
-        {
-            b_tmp[dir] = tmp[dir];
-        }
-
-        // Set the coefficients
-        matrix.setBCoeffs(lev, b_tmp);
-
-        // This sets the coefficient on the wall and defines it as a homogeneous Dirichlet bc
+        // This sets the coefficient on the wall and defines the wall as a homogeneous Dirichlet bc
         matrix.setEBHomogDirichlet(lev, *eta[lev]);
 
         // Tells the solver to use the higher order extrapolation to define d(phi)/dn at EB walls
@@ -175,13 +167,13 @@ void DiffusionEquation::solve(Vector<std::unique_ptr<MultiFab>>& vel,
 
         for(int lev = 0; lev <= amrcore->finestLevel(); lev++)
         {
-            // Set the right hand side to equal ro
+            // Set the right hand side to equal rho
             rhs[lev]->copy(*ro[lev], 0, 0, 1, nghost, nghost);
 
             // Multiply rhs by vel(dir) to get momentum
             // Note that vel holds the updated velocity:
             //
-            //      u_old + dt ( - u grad u + div tau / ro - grad p / rho + gravity )
+            //      u_old + dt ( - u grad u + div ( eta (grad u)^T ) / rho - grad p / rho + gravity )
             //
             MultiFab::Multiply((*rhs[lev]), (*vel[lev]), dir, 0, 1, nghost);
 
@@ -224,56 +216,8 @@ void DiffusionEquation::updateCoefficients(const Vector<std::unique_ptr<MultiFab
     Vector<Geometry> geom = amrcore->Geom();
     for(int lev = 0; lev <= amrcore->finestLevel(); lev++)
     {
-#ifdef _OPENMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
-#endif
-        for(MFIter mfi(*eta[lev], TilingIfNotGPU()); mfi.isValid(); ++mfi)
-        {
-            // Tileboxes for staggered components
-            Box bx = mfi.tilebox();
-            Box ubx = mfi.tilebox(e_x);
-            Box vbx = mfi.tilebox(e_y);
-            Box wbx = mfi.tilebox(e_z);
+        average_cellcenter_to_face(GetArrOfPtrs(b[lev]), *eta[lev], geom[lev]);
 
-            // this is to check efficiently if this tile contains any eb stuff
-            const EBFArrayBox& eta_fab = static_cast<EBFArrayBox const&>((*eta[lev])[mfi]);
-            const EBCellFlagFab& flags = eta_fab.getEBCellFlagFab();
-
-            if(flags.getType(grow(bx, 0)) == FabType::covered)
-            {
-                b[lev][0]->setVal(1.2345e300, ubx, 0, 1);
-                b[lev][1]->setVal(1.2345e300, vbx, 0, 1);
-                b[lev][2]->setVal(1.2345e300, wbx, 0, 1);
-            }
-            else
-            {
-                const auto& betax_fab = (*(b[lev])[0]).array(mfi);
-                const auto& betay_fab = (*(b[lev])[1]).array(mfi);
-                const auto& betaz_fab = (*(b[lev])[2]).array(mfi);
-                const auto&   eta_arr = eta[lev]->array(mfi);
-
-                amrex::ParallelFor(ubx, 
-                      [=] (int i, int j, int k)
-                {
-                    // X-faces
-                    betax_fab(i,j,k) = 0.5 * ( eta_arr(i,j,k) + eta_arr(i-1,j,k) );
-                });
-
-                amrex::ParallelFor(vbx, 
-                      [=] (int i, int j, int k)
-                {
-                    // Y-faces
-                    betay_fab(i,j,k) = 0.5 * ( eta_arr(i,j,k) + eta_arr(i,j-1,k) );
-                });
-
-                amrex::ParallelFor(wbx, 
-                      [=] (int i, int j, int k)
-                {
-                    // Z-faces
-                    betaz_fab(i,j,k) = 0.5 * ( eta_arr(i,j,k) + eta_arr(i,j,k-1) );
-                });
-            }
-        }
         for(int dir = 0; dir < 3; dir++)
         {
             b[lev][dir]->FillBoundary(geom[lev].periodicity());

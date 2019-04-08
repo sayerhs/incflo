@@ -40,7 +40,6 @@ void incflo::ReadParameters()
 		pp.query("cfl", cfl);
 		pp.query("fixed_dt", fixed_dt);
 		pp.query("steady_state_tol", steady_state_tol);
-		pp.query("explicit_diffusion", explicit_diffusion);
         pp.query("initial_iterations", initial_iterations);
         pp.query("do_initial_proj", do_initial_proj);
 
@@ -139,11 +138,19 @@ void incflo::ReadParameters()
             amrex::Abort("Unknown fluid_model! Choose either newtonian, powerlaw, bingham, hb, smd");
         }
 
+        // Get cyclicity, (to pass to Fortran)
+        Vector<int> is_cyclic(3);
+        for(int dir = 0; dir < 3; dir++)
+        {
+            is_cyclic[dir] = geom[0].isPeriodic(dir);
+        }
+
         // Loads constants given at runtime `inputs` file into the Fortran module "constant"
-        incflo_get_data(delp.dataPtr(), gravity.dataPtr(), &ro_0, &mu, 
-                        &ic_u, &ic_v, &ic_w, &ic_p,
-                        &n, &tau_0, &papa_reg, &eta_0, 
-                        fluid_model.c_str(), fluid_model.size());
+        fortran_get_data(is_cyclic.dataPtr(),
+                         delp.dataPtr(), gravity.dataPtr(), &ro_0, &mu, 
+                         &ic_u, &ic_v, &ic_w, &ic_p,
+                         &n, &tau_0, &papa_reg, &eta_0, 
+                         fluid_model.c_str(), fluid_model.size());
 	}
 }
 
@@ -161,13 +168,10 @@ void incflo::PostInit(int restart_flag)
                                                bc_jlo, bc_jhi, 
                                                bc_klo, bc_khi, nghost));
 
-    if(!explicit_diffusion)
-    {
-        diffusion_equation.reset(new DiffusionEquation(this, &ebfactory, 
-                                                       bc_ilo, bc_ihi, 
-                                                       bc_jlo, bc_jhi, 
-                                                       bc_klo, bc_khi, nghost));
-    }
+    diffusion_equation.reset(new DiffusionEquation(this, &ebfactory, 
+                                                   bc_ilo, bc_ihi, 
+                                                   bc_jlo, bc_jhi, 
+                                                   bc_klo, bc_khi, nghost));
 
     // Initial fluid arrays: pressure, velocity, density, viscosity
     if(!restart_flag) 
@@ -228,23 +232,6 @@ void incflo::InitFluid()
 
 void incflo::SetBCTypes()
 {
-    // Set periodicity only at level 0
-    int cyc_x = 0, cyc_y = 0, cyc_z = 0;
-    if(geom[0].isPeriodic(0)) 
-    {
-        cyc_x = 1;
-    }
-    if(geom[0].isPeriodic(1)) 
-    {
-        cyc_y = 1;
-    }
-    if(geom[0].isPeriodic(2)) 
-    {
-        cyc_z = 1;
-    }
-    incflo_set_cyclic(&cyc_x, &cyc_y, &cyc_z);
-
-    // Set BC-types 
     for(int lev = 0; lev <= max_level; lev++)
     {
         Real dx = geom[lev].CellSize(0);

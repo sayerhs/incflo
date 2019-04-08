@@ -44,11 +44,10 @@ contains
                             vfrac,   vflo, vfhi, &
                             bcent,    blo,  bhi, &
                             domlo, domhi,        &
-                            dx, ng, eta,         &
-                            do_explicit_diffusion) bind(C)
+                            dx, ng, eta) bind(C)
 
       use bc
-      use eb_interpolation_mod, only: interp_to_face_centroid
+      use amrex_eb_util_module, only: amrex_eb_interpolate_to_face_centroid_per_cell
       use eb_wallflux_mod,      only: compute_diff_wallflux
 
       ! Tile bounds (cell centered)
@@ -104,11 +103,6 @@ contains
       integer(c_int), intent(in   ) ::  &
            & flags(flo(1):fhi(1),flo(2):fhi(2),flo(3):fhi(3))
 
-      ! If true  then we include all the diffusive terms in this explicit result
-      ! If false then we include all only the off-diagonal terms here -- we do this
-      !     by computing the full tensor then subtracting the diagonal terms
-      integer(c_int),  intent(in   ), optional :: do_explicit_diffusion
-
       ! Conservative div and EB stuff
       real(ar)  ::    &
            &  divc(lo(1)-2:hi(1)+2,lo(2)-2:hi(2)+2,lo(3)-2:hi(3)+2), &
@@ -128,7 +122,7 @@ contains
       idz = one / dx(3)
 
       ! Check number of ghost cells
-      if (ng < 4) call amrex_abort( "compute_divop(): ng must be >= 4")
+      if (ng < 5) call amrex_abort( "compute_divop(): ng must be >= 5")
 
       ! Check if we are computing divergence for viscous term
       if (present(eta)) then
@@ -205,29 +199,29 @@ contains
 
                         call get_neighbor_cells( flags(i,j,k), nbr )
 
-                        ! interp_to_face_centroid returns the proper flux multiplied
+                        ! amrex_eb_interpolate_to_face_centroid_per_cell returns the proper flux multiplied
                         ! by the face area
-                        fxp = interp_to_face_centroid( i+1, j, k, 1, fx, fxlo, n,  &
+                        fxp = amrex_eb_interpolate_to_face_centroid_per_cell( i+1, j, k, 1, fx, fxlo, n,  &
                              & afrac_x, axlo, cent_x, cxlo, nbr )
 
-                        fxm = interp_to_face_centroid( i  , j, k, 1, fx, fxlo, n,  &
+                        fxm = amrex_eb_interpolate_to_face_centroid_per_cell( i  , j, k, 1, fx, fxlo, n,  &
                              & afrac_x, axlo, cent_x, cxlo, nbr )
 
-                        fyp = interp_to_face_centroid( i, j+1, k, 2, fy, fylo, n,  &
+                        fyp = amrex_eb_interpolate_to_face_centroid_per_cell( i, j+1, k, 2, fy, fylo, n,  &
                              & afrac_y, aylo, cent_y, cylo, nbr )
 
-                        fym = interp_to_face_centroid( i, j, k, 2, fy, fylo, n,  &
+                        fym = amrex_eb_interpolate_to_face_centroid_per_cell( i, j, k, 2, fy, fylo, n,  &
                              & afrac_y, aylo, cent_y, cylo, nbr )
 
-                        fzp = interp_to_face_centroid( i, j, k+1, 3, fz, fzlo, n,  &
+                        fzp = amrex_eb_interpolate_to_face_centroid_per_cell( i, j, k+1, 3, fz, fzlo, n,  &
                              & afrac_z, azlo, cent_z, czlo, nbr )
 
-                        fzm = interp_to_face_centroid( i, j, k, 3, fz, fzlo, n,  &
+                        fzm = amrex_eb_interpolate_to_face_centroid_per_cell( i, j, k, 3, fz, fzlo, n,  &
                              & afrac_z, azlo, cent_z, czlo, nbr )
 
-                        divc(i,j,k) = ( ( fxp - fxm ) * idx + &
-                             &          ( fyp - fym ) * idy + &
-                             &          ( fzp - fzm ) * idz ) / vfrac(i,j,k)
+                        divc(i,j,k) = ( ( fxp * afrac_x(i+1,j,k) - fxm * afrac_x(i,j,k) ) * idx + &
+                             &          ( fyp * afrac_y(i,j+1,k) - fym * afrac_y(i,j,k) ) * idy + &
+                             &          ( fzp * afrac_z(i,j,k+1) - fzm * afrac_z(i,j,k) ) * idz ) / vfrac(i,j,k)
 
                         ! Add viscous wall fluxes (compute three components only
                         ! during the first pass, i.e. for n=1
@@ -241,8 +235,7 @@ contains
                                                          flags, flo, fhi,     &
                                                          afrac_x, axlo, axhi, &
                                                          afrac_y, aylo, ayhi, &
-                                                         afrac_z, azlo, azhi, &
-                                                         do_explicit_diffusion)
+                                                         afrac_z, azlo, azhi) 
                            end if
                            divc(i,j,k) = divc(i,j,k) - divdiff_w(n,iwall) / (dx(n) * vfrac(i,j,k))
                         end if

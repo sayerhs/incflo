@@ -56,15 +56,17 @@ private:
     // PoissonEquation verbosity
 	int verbose = 0;
 
-	// Options to control MLMG behavior
+	// Options to control solver behavior
 	int mg_verbose = 0;
 	int mg_cg_verbose = 0;
 	int mg_max_iter = 100;
 	int mg_cg_maxiter = 100;
 	int mg_max_fmg_iter = 0;
+    int mg_max_coarsening_level = 100;
     amrex::Real mg_rtol = 1.0e-11;
     amrex::Real mg_atol = 1.0e-14;
     std::string bottom_solver_type = "bicgstab";
+    bool use_hypre = false;
 };
 
 

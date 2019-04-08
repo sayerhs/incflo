@@ -196,14 +196,16 @@ private:
 	void make_eb_annulus();
 	void make_eb_box();
 	void make_eb_cylinder();
+	void make_eb_twocylinders();
 	void make_eb_regular();
 	void make_eb_sphere();
+	void make_eb_spherecube();
 
 	const EB2::Level* eb_level;
 	Vector<std::unique_ptr<EBFArrayBoxFactory>> ebfactory;
 
 	// Number of ghost nodes for field arrays.
-	const int nghost = 4;
+	const int nghost = 5;
 
 	// These values are required when fluid sees EB -- for now
 	const int m_eb_basic_grow_cells = nghost;
@@ -234,9 +236,6 @@ private:
 	// Options to control time stepping
 	Real cfl = 0.5;
 	Real fixed_dt = -1.;
-
-    // Whether to use the explicit diffusion or the semi-implicit one
-	int explicit_diffusion = 0;
 
     // Initial projection / iterations
     bool do_initial_proj    = true;
@@ -366,8 +365,6 @@ private:
     // Not yet classified
     //
     //////////////////////////////////////////////////////////////////////////////////////////////
-
-	void make_mg_bc(int mg_bc[]);
 
     void FillPatchVel(int lev, Real time, MultiFab& mf, int icomp, int ncomp);
     void GetDataVel(int lev, Real time, Vector<MultiFab*>& data, Vector<Real>& datatime);
