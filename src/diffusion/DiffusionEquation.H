@@ -32,7 +32,7 @@ public:
                       amrex::Vector<std::unique_ptr<amrex::IArrayBox>>& bc_jhi, 
                       amrex::Vector<std::unique_ptr<amrex::IArrayBox>>& bc_klo, 
                       amrex::Vector<std::unique_ptr<amrex::IArrayBox>>& bc_khi,
-                      int _nghost);
+                      int _nghost, amrex::Real cyl_speed);
 
     // Destructor
     ~DiffusionEquation();
@@ -54,13 +54,11 @@ public:
                amrex::Real dt);
 
 private:
-    // Update the variable coefficients in the matrix operator, called from setCurrentState()
-    void updateCoefficients(const amrex::Vector<std::unique_ptr<amrex::MultiFab>>& eta);
-
     // AmrCore data 
     amrex::AmrCore* amrcore;
 	amrex::Vector<std::unique_ptr<amrex::EBFArrayBoxFactory>>* ebfactory;
     int nghost; 
+    amrex::Real cyl_speed = 0.0;
 
     // Internal data used in the matrix solve
     //
@@ -72,6 +70,8 @@ private:
     amrex::Vector<amrex::Array<std::unique_ptr<amrex::MultiFab>, AMREX_SPACEDIM>> b;
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> phi;
     amrex::Vector<std::unique_ptr<amrex::MultiFab>> rhs;
+    amrex::Vector<std::unique_ptr<amrex::MultiFab>> ueb;
+    amrex::Vector<std::unique_ptr<amrex::MultiFab>> veb;
 
     // Boundary conditions
     int bc_lo[3], bc_hi[3];
@@ -85,7 +85,7 @@ private:
 	int mg_max_iter = 100;
 	int mg_cg_maxiter = 100;
 	int mg_max_fmg_iter = 0;
-	int mg_max_coarsening_level = 0;
+	int mg_max_coarsening_level = 100;
     amrex::Real mg_rtol = 1.0e-11;
     amrex::Real mg_atol = 1.0e-14;
     std::string bottom_solver_type = "bicgstab";

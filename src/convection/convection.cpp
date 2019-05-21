@@ -8,7 +8,7 @@
 // Compute acc using the vel passed in
 //
 void incflo::ComputeUGradU(Vector<std::unique_ptr<MultiFab>>& conv_in,
-                           Vector<std::unique_ptr<MultiFab>>& vel_in, 
+                           Vector<std::unique_ptr<MultiFab>>& vel_in,
                            Real time)
 {
 	BL_PROFILE("incflo::ComputeUGradU");
@@ -33,7 +33,7 @@ void incflo::ComputeUGradU(Vector<std::unique_ptr<MultiFab>>& conv_in,
         facecent  =   ebfactory[lev] -> getFaceCent();
         volfrac   = &(ebfactory[lev] -> getVolFrac());
         bndrycent = &(ebfactory[lev] -> getBndryCent());
-           
+
 #ifdef _OPENMP
 #pragma omp parallel if (Gpu::notInLaunchRegion())
 #endif
@@ -115,8 +115,235 @@ void incflo::ComputeUGradU(Vector<std::unique_ptr<MultiFab>>& conv_in,
 }
 
 //
-// Compute the slopes of each velocity component in the
-// three directions.
+// TODO: Documentation
+//
+void incflo::ComputeVelocityAtFaces(Vector<std::unique_ptr<MultiFab>>& vel_in, Real time)
+{
+	BL_PROFILE("incflo::ComputeVelocityAtFaces");
+
+    for(int lev = 0; lev <= finest_level; lev++)
+    {
+        Box domain(geom[lev].Domain());
+
+        // State with ghost cells
+        MultiFab Sborder(grids[lev], dmap[lev], vel[lev]->nComp(), nghost,
+                         MFInfo(), *ebfactory[lev]);
+        FillPatchVel(lev, time, Sborder, 0, Sborder.nComp());
+
+        // Compute the slopes
+        ComputeVelocitySlopes(lev, Sborder);
+
+        // Copy each FAB back from Sborder into the vel array, complete with filled ghost cells
+        MultiFab::Copy (*vel_in[lev], Sborder, 0, 0, vel_in[lev]->nComp(), vel_in[lev]->nGrow());
+
+        // Get EB geometric info
+        Array<const MultiCutFab*, AMREX_SPACEDIM> areafrac;
+        areafrac = ebfactory[lev]->getAreaFrac();
+
+    // Then compute velocity at faces
+#ifdef _OPENMP
+#pragma omp parallel if (Gpu::notInLaunchRegion())
+#endif
+        for(MFIter mfi(Sborder, TilingIfNotGPU()); mfi.isValid(); ++mfi)
+        {
+            // Tilebox
+            Box bx = mfi.tilebox();
+            Box ubx = mfi.tilebox(e_x);
+            Box vbx = mfi.tilebox(e_y);
+            Box wbx = mfi.tilebox(e_z);
+
+            // this is to check efficiently if this tile contains any eb stuff
+            const EBFArrayBox& vel_in_fab = static_cast<EBFArrayBox const&>(Sborder[mfi]);
+            const EBCellFlagFab& flags = vel_in_fab.getEBCellFlagFab();
+
+            Real small_vel = 1.e-10;
+            Real  huge_vel = 1.e100;
+
+            // Cell-centered velocity
+            const auto& ccvel_fab = vel[lev]->array(mfi);
+
+            // Cell-centered slopes
+            const auto& xslopes_fab = (xslopes[lev])->array(mfi);
+            const auto& yslopes_fab = (yslopes[lev])->array(mfi);
+            const auto& zslopes_fab = (zslopes[lev])->array(mfi);
+
+            // Face-centered velocity components
+            const auto& umac_fab = (m_u_mac[lev])->array(mfi);
+            const auto& vmac_fab = (m_v_mac[lev])->array(mfi);
+            const auto& wmac_fab = (m_w_mac[lev])->array(mfi);
+
+            if(flags.getType(amrex::grow(bx, 0)) == FabType::covered)
+            {
+                m_u_mac[lev]->setVal(1.2345e300, ubx, 0, 1);
+                m_v_mac[lev]->setVal(1.2345e300, vbx, 0, 1);
+                m_w_mac[lev]->setVal(1.2345e300, wbx, 0, 1);
+            }
+            else if(flags.getType(amrex::grow(bx, 1)) == FabType::regular)
+            {
+                // No cut cells in tile + 1-cell witdh halo -> use non-eb routine
+                AMREX_CUDA_HOST_DEVICE_FOR_3D(ubx, i, j, k,
+                {
+                    // X-faces
+                    Real upls     = ccvel_fab(i  ,j,k,0) - 0.5 * xslopes_fab(i  ,j,k,0);
+                    Real umns     = ccvel_fab(i-1,j,k,0) + 0.5 * xslopes_fab(i-1,j,k,0);
+                    if ( umns < 0.0 && upls > 0.0 )
+                    {
+                        umac_fab(i,j,k) = 0.0;
+                    }
+                    else
+                    {
+                        Real avg = 0.5 * ( upls + umns );
+                        if (std::abs(avg) <  small_vel)
+                            umac_fab(i,j,k) = 0.0;
+                        else if (avg >= 0)
+                            umac_fab(i,j,k) = umns;
+                        else
+                            umac_fab(i,j,k) = upls;
+                    }
+                });
+
+                AMREX_CUDA_HOST_DEVICE_FOR_3D(vbx, i, j, k,
+                {
+                    // Y-faces
+                    Real upls     = ccvel_fab(i,j  ,k,1) - 0.5 * yslopes_fab(i,j  ,k,1);
+                    Real umns     = ccvel_fab(i,j-1,k,1) + 0.5 * yslopes_fab(i,j-1,k,1);
+                    if ( umns < 0.0 && upls > 0.0 )
+                    {
+                        vmac_fab(i,j,k) = 0.0;
+                    }
+                    else
+                    {
+                        Real avg = 0.5 * ( upls + umns );
+                        if (std::abs(avg) <  small_vel)
+                            vmac_fab(i,j,k) = 0.0;
+                        else if (avg >= 0)
+                            vmac_fab(i,j,k) = umns;
+                        else
+                            vmac_fab(i,j,k) = upls;
+                    }
+                });
+
+                AMREX_CUDA_HOST_DEVICE_FOR_3D(wbx, i, j, k,
+                {
+                    // Z-faces
+                    Real upls     = ccvel_fab(i,j,k  ,2) - 0.5 * zslopes_fab(i,j,k  ,2);
+                    Real umns     = ccvel_fab(i,j,k-1,2) + 0.5 * zslopes_fab(i,j,k-1,2);
+                    if ( umns < 0.0 && upls > 0.0 )
+                    {
+                        wmac_fab(i,j,k) = 0.0;
+                    }
+                    else
+                    {
+                        Real avg = 0.5 * ( upls + umns );
+                        if ( std::abs(avg) <  small_vel)
+                            wmac_fab(i,j,k) = 0.0;
+                        else if (avg >= 0)
+                            wmac_fab(i,j,k) = umns;
+                        else
+                            wmac_fab(i,j,k) = upls;
+                    }
+                });
+
+            }
+            else
+            {
+
+                // Face-centered areas
+                const auto& ax_fab = areafrac[0]->array(mfi);
+                const auto& ay_fab = areafrac[1]->array(mfi);
+                const auto& az_fab = areafrac[2]->array(mfi);
+
+                // This FAB has cut cells
+                AMREX_CUDA_HOST_DEVICE_FOR_3D(ubx, i, j, k,
+                {
+                    // X-faces
+                    if (ax_fab(i,j,k) > 0.0)
+                    {
+                        Real upls     = ccvel_fab(i  ,j,k,0) - 0.5 * xslopes_fab(i  ,j,k,0);
+                        Real umns     = ccvel_fab(i-1,j,k,0) + 0.5 * xslopes_fab(i-1,j,k,0);
+                        if ( umns < 0.0 && upls > 0.0 )
+                        {
+                            umac_fab(i,j,k) = 0.0;
+                        }
+                        else
+                        {
+                            Real avg = 0.5 * ( upls + umns );
+                            if (std::abs(avg) <  small_vel)
+                                umac_fab(i,j,k) = 0.0;
+                            else if (avg >= 0)
+                                umac_fab(i,j,k) = umns;
+                            else
+                                umac_fab(i,j,k) = upls;
+                        }
+                    }
+                    else
+                    {
+                        umac_fab(i,j,k) = huge_vel;
+                    }
+                });
+
+                AMREX_CUDA_HOST_DEVICE_FOR_3D(vbx, i, j, k,
+                {
+                    // Y-faces
+                    if (ay_fab(i,j,k) > 0.0)
+                    {
+                        Real upls     = ccvel_fab(i,j  ,k,1) - 0.5 * yslopes_fab(i,j  ,k,1);
+                        Real umns     = ccvel_fab(i,j-1,k,1) + 0.5 * yslopes_fab(i,j-1,k,1);
+                        if ( umns < 0.0 && upls > 0.0 )
+                        {
+                            vmac_fab(i,j,k) = 0.0;
+                        }
+                        else
+                        {
+                            Real avg = 0.5 * ( upls + umns );
+                            if ( std::abs(avg) <  small_vel)
+                                vmac_fab(i,j,k) = 0.0;
+                            else if (avg >= 0)
+                                vmac_fab(i,j,k) = umns;
+                            else
+                                vmac_fab(i,j,k) = upls;
+                        }
+                    }
+                    else
+                    {
+                        vmac_fab(i,j,k) = huge_vel;
+                    }
+                });
+
+                AMREX_CUDA_HOST_DEVICE_FOR_3D(wbx, i, j, k,
+                {
+                    // Z-faces
+                    if (az_fab(i,j,k) > 0.0)
+                    {
+                       Real upls     = ccvel_fab(i,j,k  ,2) - 0.5 * zslopes_fab(i,j,k  ,2);
+                       Real umns     = ccvel_fab(i,j,k-1,2) + 0.5 * zslopes_fab(i,j,k-1,2);
+                       if ( umns < 0.0 && upls > 0.0 )
+                       {
+                            wmac_fab(i,j,k) = 0.0;
+                       }
+                       else
+                       {
+                            Real avg = 0.5 * ( upls + umns );
+                            if (std::abs(avg) <  small_vel)
+                                wmac_fab(i,j,k) = 0.0;
+                            else if (avg >= 0)
+                                wmac_fab(i,j,k) = umns;
+                            else
+                                wmac_fab(i,j,k) = upls;
+                       }
+                    }
+                    else
+                    {
+                        wmac_fab(i,j,k) = huge_vel;
+                    }
+                });
+
+            } // Cut cells
+        } // MFIter
+    } // Levels
+}
+//
+// Compute the slopes of each velocity component in all three directions.
 //
 void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
 {
@@ -159,8 +386,7 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
 			// No cut cells in tile + 1-cell witdh halo -> use non-eb routine
 			if(flags.getType(amrex::grow(bx, 1)) == FabType::regular)
 			{
-                amrex::ParallelFor(bx, ncomp,
-                      [=] (int i, int j, int k, int dir)
+                AMREX_CUDA_HOST_DEVICE_FOR_4D(bx, ncomp, i, j, k, dir,
                 {
                    // X direction
                    Real du_xl = 2.0*(vel_fab(i  ,j,k,dir) - vel_fab(i-1,j,k,dir));
@@ -170,7 +396,7 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
                    Real xslope = amrex::min(std::abs(du_xl),std::abs(du_xc),std::abs(du_xr));
                    xslope            = (du_xr*du_xl > 0.0) ? xslope : 0.0;
                    xs_fab(i,j,k,dir) = (du_xc       > 0.0) ? xslope : -xslope;
- 
+
                    // Y direction
                    Real du_yl = 2.0*(vel_fab(i,j  ,k,dir) - vel_fab(i,j-1,k,dir));
                    Real du_yr = 2.0*(vel_fab(i,j+1,k,dir) - vel_fab(i,j  ,k,dir));
@@ -179,7 +405,7 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
                    Real yslope = amrex::min(std::abs(du_yl),std::abs(du_yc),std::abs(du_yr));
                    yslope            = (du_yr*du_yl > 0.0) ? yslope : 0.0;
                    ys_fab(i,j,k,dir) = (du_yc       > 0.0) ? yslope : -yslope;
- 
+
                    // Z direction
                    Real du_zl = 2.0*(vel_fab(i,j,k  ,dir) - vel_fab(i,j,k-1,dir));
                    Real du_zr = 2.0*(vel_fab(i,j,k+1,dir) - vel_fab(i,j,k  ,dir));
@@ -194,8 +420,7 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
 			{
                 const auto& flag_fab = flags.array();
 
-                amrex::ParallelFor(bx, ncomp,
-                      [=] (int i, int j, int k, int dir)
+                AMREX_CUDA_HOST_DEVICE_FOR_4D(bx, ncomp, i, j, k, dir,
                 {
                     if (flag_fab(i,j,k).isCovered())
                     {
@@ -215,25 +440,25 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
                         Real xslope = amrex::min(std::abs(du_xl),std::abs(du_xc),std::abs(du_xr));
                         xslope            = (du_xr*du_xl > 0.0) ? xslope : 0.0;
                         xs_fab(i,j,k,dir) = (du_xc       > 0.0) ? xslope : -xslope;
- 
+
                         // Y direction
                         Real du_yl = (flag_fab(i,j-1,k).isCovered()) ? 0.0 :
                                      2.0*(vel_fab(i,j  ,k,dir) - vel_fab(i,j-1,k,dir));
                         Real du_yr = (flag_fab(i,j+1,k).isCovered()) ? 0.0 :
                                      2.0*(vel_fab(i,j+1,k,dir) - vel_fab(i,j  ,k,dir));
                         Real du_yc = 0.5*(vel_fab(i,j+1,k,dir) - vel_fab(i,j-1,k,dir));
-    
+
                         Real yslope = amrex::min(std::abs(du_yl),std::abs(du_yc),std::abs(du_yr));
                         yslope            = (du_yr*du_yl > 0.0) ? yslope : 0.0;
                         ys_fab(i,j,k,dir) = (du_yc       > 0.0) ? yslope : -yslope;
-     
+
                         // Z direction
                         Real du_zl = (flag_fab(i,j,k-1).isCovered()) ? 0.0 :
                                      2.0*(vel_fab(i,j,k  ,dir) - vel_fab(i,j,k-1,dir));
                         Real du_zr = (flag_fab(i,j,k+1).isCovered()) ? 0.0 :
                                      2.0*(vel_fab(i,j,k+1,dir) - vel_fab(i,j,k  ,dir));
                         Real du_zc = 0.5*(vel_fab(i,j,k+1,dir) - vel_fab(i,j,k-1,dir));
-    
+
                         Real zslope = amrex::min(std::abs(du_zl),std::abs(du_zc),std::abs(du_zr));
                         zslope          = (du_zr*du_zl > 0.0) ? zslope : 0.0;
                         zs_fab(i,j,k,dir) = (du_zc       > 0.0) ? zslope : -zslope;
@@ -241,17 +466,83 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
                 });
 	        }
 
-            correct_slopes(BL_TO_FORTRAN_BOX(bx),
-                           BL_TO_FORTRAN_ANYD(Sborder[mfi]),
-                           (*xslopes[lev])[mfi].dataPtr(),
-                           (*yslopes[lev])[mfi].dataPtr(),
-                           BL_TO_FORTRAN_ANYD((*zslopes[lev])[mfi]),
-                           BL_TO_FORTRAN_ANYD(flags),
-                           domain.loVect(), domain.hiVect(),
-                           bc_ilo[lev]->dataPtr(), bc_ihi[lev]->dataPtr(),
-                           bc_jlo[lev]->dataPtr(), bc_jhi[lev]->dataPtr(),
-                           bc_klo[lev]->dataPtr(), bc_khi[lev]->dataPtr(),
-                           &nghost);
+            // TODO -- do we have domain and ilo_fab, etc on GPU???
+            // TODO -- we need to use "MINF" from the Fortran, not hard-wire this to 20
+
+            const auto& flag_fab =         flags.array();
+
+            const auto&  ilo_ifab  = bc_ilo[lev]->array();
+            const auto&  ihi_ifab  = bc_ihi[lev]->array();
+            const auto&  jlo_ifab  = bc_jlo[lev]->array();
+            const auto&  jhi_ifab  = bc_jhi[lev]->array();
+            const auto&  klo_ifab  = bc_klo[lev]->array();
+            const auto&  khi_ifab  = bc_khi[lev]->array();
+
+            AMREX_CUDA_HOST_DEVICE_FOR_4D(bx, ncomp, i, j, k, dir,
+            {
+                if ( (i == domain.smallEnd(0)) && !flag_fab(i,j,k).isCovered() && ilo_ifab(i-1,j,k,0) == 20)
+                {
+                    Real du_xl = 2.0*(vel_fab(i  ,j,k,dir) - vel_fab(i-1,j,k,dir));
+                    Real du_xr = 2.0*(vel_fab(i+1,j,k,dir) - vel_fab(i  ,j,k,dir));
+                    Real du_xc = (vel_fab(i+1,j,k,dir)+3.0*vel_fab(i,j,k,dir)-4.0*vel_fab(i-1,j,k,dir))/3.0;
+
+                    Real xslope = amrex::min(std::abs(du_xl),std::abs(du_xc),std::abs(du_xr));
+                    xslope            = (du_xr*du_xl > 0.0) ? xslope : 0.0;
+                    xs_fab(i,j,k,dir) = (du_xc       > 0.0) ? xslope : -xslope;
+                }
+                if ( (i == domain.bigEnd(0)) && !flag_fab(i,j,k).isCovered() && ihi_ifab(i+1,j,k,0) == 20)
+                {
+                    Real du_xl = 2.0*(vel_fab(i  ,j,k,dir) - vel_fab(i-1,j,k,dir));
+                    Real du_xr = 2.0*(vel_fab(i+1,j,k,dir) - vel_fab(i  ,j,k,dir));
+                    Real du_xc = -(vel_fab(i-1,j,k,dir)+3.0*vel_fab(i,j,k,dir)-4.0*vel_fab(i+1,j,k,dir))/3.0;
+
+                    Real xslope = amrex::min(std::abs(du_xl),std::abs(du_xc),std::abs(du_xr));
+                    xslope            = (du_xr*du_xl > 0.0) ? xslope : 0.0;
+                    xs_fab(i,j,k,dir) = (du_xc       > 0.0) ? xslope : -xslope;
+                }
+
+                if ( (j == domain.smallEnd(1)) && !flag_fab(i,j,k).isCovered() && jlo_ifab(i,j-1,k,0) == 20)
+                {
+                    Real du_yl = 2.0*(vel_fab(i,j  ,k,dir) - vel_fab(i,j-1,k,dir));
+                    Real du_yr = 2.0*(vel_fab(i,j+1,k,dir) - vel_fab(i,j  ,k,dir));
+                    Real du_yc = (vel_fab(i,j+1,k,dir)+3.0*vel_fab(i,j,k,dir)-4.0*vel_fab(i,j-1,k,dir))/3.0;
+
+                    Real yslope = amrex::min(std::abs(du_yl),std::abs(du_yc),std::abs(du_yr));
+                    yslope            = (du_yr*du_yl > 0.0) ? yslope : 0.0;
+                    ys_fab(i,j,k,dir) = (du_yc       > 0.0) ? yslope : -yslope;
+                }
+                if ( (j == domain.bigEnd(1)) && !flag_fab(i,j,k).isCovered() && jhi_ifab(i,j+1,k,0) == 20)
+                {
+                    Real du_yl = 2.0*(vel_fab(i,j  ,k,dir) - vel_fab(i,j-1,k,dir));
+                    Real du_yr = 2.0*(vel_fab(i,j+1,k,dir) - vel_fab(i,j  ,k,dir));
+                    Real du_yc = -(vel_fab(i,j-1,k,dir)+3.0*vel_fab(i,j,k,dir)-4.0*vel_fab(i,j+1,k,dir))/3.0;
+
+                    Real yslope = amrex::min(std::abs(du_yl),std::abs(du_yc),std::abs(du_yr));
+                    yslope            = (du_yr*du_yl > 0.0) ? yslope : 0.0;
+                    ys_fab(i,j,k,dir) = (du_yc       > 0.0) ? yslope : -yslope;
+                }
+
+                if ( (k == domain.smallEnd(2)) && !flag_fab(i,j,k).isCovered() && klo_ifab(i,j,k-1,0) == 20)
+                {
+                    Real du_zl = 2.0*(vel_fab(i,j,k  ,dir) - vel_fab(i,j,k-1,dir));
+                    Real du_zr = 2.0*(vel_fab(i,j,k+1,dir) - vel_fab(i,j,k  ,dir));
+                    Real du_zc = (vel_fab(i,j,k+1,dir)+3.0*vel_fab(i,j,k,dir)-4.0*vel_fab(i,j,k-1,dir))/3.0;
+
+                    Real zslope = amrex::min(std::abs(du_zl),std::abs(du_zc),std::abs(du_zr));
+                    zslope            = (du_zr*du_zl > 0.0) ? zslope : 0.0;
+                    zs_fab(i,j,k,dir) = (du_zc       > 0.0) ? zslope : -zslope;
+                }
+                if ( (k == domain.bigEnd(2)) && !flag_fab(i,j,k).isCovered() && khi_ifab(i,j,k+1,0) == 20)
+                {
+                    Real du_zl = 2.0*(vel_fab(i,j,k  ,dir) - vel_fab(i,j,k-1,dir));
+                    Real du_zr = 2.0*(vel_fab(i,j,k+1,dir) - vel_fab(i,j,k  ,dir));
+                    Real du_zc = -(vel_fab(i,j,k-1,dir)+3.0*vel_fab(i,j,k,dir)-4.0*vel_fab(i,j,k+1,dir))/3.0;
+
+                    Real zslope = amrex::min(std::abs(du_zl),std::abs(du_zc),std::abs(du_zr));
+                    zslope            = (du_zr*du_zl > 0.0) ? zslope : 0.0;
+                    zs_fab(i,j,k,dir) = (du_zc       > 0.0) ? zslope : -zslope;
+                }
+            });
 		}
 	}
 
@@ -260,110 +551,3 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
 	zslopes[lev]->FillBoundary(geom[lev].periodicity());
 }
 
-//
-// TODO: Documentation
-//
-void incflo::ComputeVelocityAtFaces(Vector<std::unique_ptr<MultiFab>>& vel_in, Real time)
-{
-	BL_PROFILE("incflo::ComputeVelocityAtFaces");
-
-    for(int lev = 0; lev <= finest_level; lev++)
-    {
-        Box domain(geom[lev].Domain());
-
-        // State with ghost cells
-        MultiFab Sborder(grids[lev], dmap[lev], vel[lev]->nComp(), nghost, 
-                         MFInfo(), *ebfactory[lev]);
-        FillPatchVel(lev, time, Sborder, 0, Sborder.nComp());
-    
-        // Compute the slopes
-        ComputeVelocitySlopes(lev, Sborder);
-
-        // Copy each FAB back from Sborder into the vel array, complete with filled ghost cells
-        MultiFab::Copy (*vel_in[lev], Sborder, 0, 0, vel_in[lev]->nComp(), vel_in[lev]->nGrow());
-
-        // Get EB geometric info
-        Array<const MultiCutFab*, AMREX_SPACEDIM> areafrac;
-        areafrac = ebfactory[lev]->getAreaFrac();
-
-    // Then compute velocity at faces
-#ifdef _OPENMP
-#pragma omp parallel if (Gpu::notInLaunchRegion())
-#endif
-        for(MFIter mfi(Sborder, TilingIfNotGPU()); mfi.isValid(); ++mfi)
-        {
-            // Tilebox
-            Box bx = mfi.tilebox();
-            Box ubx = mfi.tilebox(e_x);
-            Box vbx = mfi.tilebox(e_y);
-            Box wbx = mfi.tilebox(e_z);
-
-            // this is to check efficiently if this tile contains any eb stuff
-            const EBFArrayBox& vel_in_fab = static_cast<EBFArrayBox const&>(Sborder[mfi]);
-            const EBCellFlagFab& flags = vel_in_fab.getEBCellFlagFab();
-
-            if(flags.getType(amrex::grow(bx, 0)) == FabType::covered)
-            {
-                m_u_mac[lev]->setVal(1.2345e300, ubx, 0, 1);
-                m_v_mac[lev]->setVal(1.2345e300, vbx, 0, 1);
-                m_w_mac[lev]->setVal(1.2345e300, wbx, 0, 1);
-            }
-            else
-            {
-                // No cut cells in tile + 1-cell witdh halo -> use non-eb routine
-                if(flags.getType(amrex::grow(bx, 1)) == FabType::regular)
-                {
-                    compute_velocity_at_faces(BL_TO_FORTRAN_BOX(bx),
-                                              BL_TO_FORTRAN_ANYD((*m_u_mac[lev])[mfi]),
-                                              BL_TO_FORTRAN_ANYD((*m_v_mac[lev])[mfi]),
-                                              BL_TO_FORTRAN_ANYD((*m_w_mac[lev])[mfi]),
-                                              BL_TO_FORTRAN_ANYD((*vel_in[lev])[mfi]),
-                                              BL_TO_FORTRAN_ANYD((*xslopes[lev])[mfi]),
-                                              (*yslopes[lev])[mfi].dataPtr(),
-                                              (*zslopes[lev])[mfi].dataPtr(),
-                                              bc_ilo[lev]->dataPtr(),
-                                              bc_ihi[lev]->dataPtr(),
-                                              bc_jlo[lev]->dataPtr(),
-                                              bc_jhi[lev]->dataPtr(),
-                                              bc_klo[lev]->dataPtr(),
-                                              bc_khi[lev]->dataPtr(),
-                                              &nghost,
-                                              domain.loVect(),
-                                              domain.hiVect());
-                }
-                else
-                {
-                    compute_velocity_at_x_faces_eb(BL_TO_FORTRAN_BOX(ubx),
-                                                   BL_TO_FORTRAN_ANYD((*m_u_mac[lev])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD((*vel_in[lev])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD((*xslopes[lev])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD((*areafrac[0])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD(flags),
-                                                   &nghost,
-                                                   domain.loVect(),
-                                                   domain.hiVect());
-
-                    compute_velocity_at_y_faces_eb(BL_TO_FORTRAN_BOX(vbx),
-                                                   BL_TO_FORTRAN_ANYD((*m_v_mac[lev])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD((*vel_in[lev])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD((*yslopes[lev])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD((*areafrac[1])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD(flags),
-                                                   &nghost,
-                                                   domain.loVect(),
-                                                   domain.hiVect());
-
-                    compute_velocity_at_z_faces_eb(BL_TO_FORTRAN_BOX(wbx),
-                                                   BL_TO_FORTRAN_ANYD((*m_w_mac[lev])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD((*vel_in[lev])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD((*zslopes[lev])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD((*areafrac[2])[mfi]),
-                                                   BL_TO_FORTRAN_ANYD(flags),
-                                                   &nghost,
-                                                   domain.loVect(),
-                                                   domain.hiVect());
-                }
-            }
-        }
-    }
-}
