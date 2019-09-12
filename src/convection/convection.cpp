@@ -51,7 +51,7 @@ void incflo::ComputeUGradU(Vector<std::unique_ptr<MultiFab>>& conv_in,
                 // If tile is completely covered by EB geometry, set slopes
                 // value to some very large number so we know if
                 // we accidentaly use these covered slopes later in calculations
-                conv_in[lev]->setVal(1.2345e300, bx, 0, 3);
+                conv_in[lev]->setVal(1.2345e300, bx, 0, AMREX_SPACEDIM);
             }
             else
             {
@@ -67,16 +67,14 @@ void incflo::ComputeUGradU(Vector<std::unique_ptr<MultiFab>>& conv_in,
                                    (*xslopes[lev])[mfi].dataPtr(),
                                    (*yslopes[lev])[mfi].dataPtr(),
                                    BL_TO_FORTRAN_ANYD((*zslopes[lev])[mfi]),
-                                   domain.loVect(),
-                                   domain.hiVect(),
+                                   domain.loVect(), domain.hiVect(),
                                    bc_ilo[lev]->dataPtr(),
                                    bc_ihi[lev]->dataPtr(),
                                    bc_jlo[lev]->dataPtr(),
                                    bc_jhi[lev]->dataPtr(),
                                    bc_klo[lev]->dataPtr(),
                                    bc_khi[lev]->dataPtr(),
-                                   geom[lev].CellSize(),
-                                   &nghost);
+                                   geom[lev].CellSize(), &nghost);
                 }
                 else
                 {
@@ -181,7 +179,7 @@ void incflo::ComputeVelocityAtFaces(Vector<std::unique_ptr<MultiFab>>& vel_in, R
             else if(flags.getType(amrex::grow(bx, 1)) == FabType::regular)
             {
                 // No cut cells in tile + 1-cell witdh halo -> use non-eb routine
-                AMREX_CUDA_HOST_DEVICE_FOR_3D(ubx, i, j, k,
+                AMREX_HOST_DEVICE_FOR_3D(ubx, i, j, k,
                 {
                     // X-faces
                     Real upls     = ccvel_fab(i  ,j,k,0) - 0.5 * xslopes_fab(i  ,j,k,0);
@@ -202,7 +200,7 @@ void incflo::ComputeVelocityAtFaces(Vector<std::unique_ptr<MultiFab>>& vel_in, R
                     }
                 });
 
-                AMREX_CUDA_HOST_DEVICE_FOR_3D(vbx, i, j, k,
+                AMREX_HOST_DEVICE_FOR_3D(vbx, i, j, k,
                 {
                     // Y-faces
                     Real upls     = ccvel_fab(i,j  ,k,1) - 0.5 * yslopes_fab(i,j  ,k,1);
@@ -223,7 +221,7 @@ void incflo::ComputeVelocityAtFaces(Vector<std::unique_ptr<MultiFab>>& vel_in, R
                     }
                 });
 
-                AMREX_CUDA_HOST_DEVICE_FOR_3D(wbx, i, j, k,
+                AMREX_HOST_DEVICE_FOR_3D(wbx, i, j, k,
                 {
                     // Z-faces
                     Real upls     = ccvel_fab(i,j,k  ,2) - 0.5 * zslopes_fab(i,j,k  ,2);
@@ -254,7 +252,7 @@ void incflo::ComputeVelocityAtFaces(Vector<std::unique_ptr<MultiFab>>& vel_in, R
                 const auto& az_fab = areafrac[2]->array(mfi);
 
                 // This FAB has cut cells
-                AMREX_CUDA_HOST_DEVICE_FOR_3D(ubx, i, j, k,
+                AMREX_HOST_DEVICE_FOR_3D(ubx, i, j, k,
                 {
                     // X-faces
                     if (ax_fab(i,j,k) > 0.0)
@@ -282,7 +280,7 @@ void incflo::ComputeVelocityAtFaces(Vector<std::unique_ptr<MultiFab>>& vel_in, R
                     }
                 });
 
-                AMREX_CUDA_HOST_DEVICE_FOR_3D(vbx, i, j, k,
+                AMREX_HOST_DEVICE_FOR_3D(vbx, i, j, k,
                 {
                     // Y-faces
                     if (ay_fab(i,j,k) > 0.0)
@@ -310,7 +308,7 @@ void incflo::ComputeVelocityAtFaces(Vector<std::unique_ptr<MultiFab>>& vel_in, R
                     }
                 });
 
-                AMREX_CUDA_HOST_DEVICE_FOR_3D(wbx, i, j, k,
+                AMREX_HOST_DEVICE_FOR_3D(wbx, i, j, k,
                 {
                     // Z-faces
                     if (az_fab(i,j,k) > 0.0)
@@ -370,9 +368,9 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
 			// If tile is completely covered by EB geometry, set slopes
 			// value to some very large number so we know if
 			// we accidentaly use these covered slopes later in calculations
-			xslopes[lev]->setVal(1.2345e300, bx, 0, 3);
-			yslopes[lev]->setVal(1.2345e300, bx, 0, 3);
-			zslopes[lev]->setVal(1.2345e300, bx, 0, 3);
+			xslopes[lev]->setVal(1.2345e300, bx, 0, AMREX_SPACEDIM);
+			yslopes[lev]->setVal(1.2345e300, bx, 0, AMREX_SPACEDIM);
+			zslopes[lev]->setVal(1.2345e300, bx, 0, AMREX_SPACEDIM);
 		}
 		else
 		{
@@ -386,7 +384,7 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
 			// No cut cells in tile + 1-cell witdh halo -> use non-eb routine
 			if(flags.getType(amrex::grow(bx, 1)) == FabType::regular)
 			{
-                AMREX_CUDA_HOST_DEVICE_FOR_4D(bx, ncomp, i, j, k, dir,
+                AMREX_HOST_DEVICE_FOR_4D(bx, ncomp, i, j, k, dir,
                 {
                    // X direction
                    Real du_xl = 2.0*(vel_fab(i  ,j,k,dir) - vel_fab(i-1,j,k,dir));
@@ -420,7 +418,7 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
 			{
                 const auto& flag_fab = flags.array();
 
-                AMREX_CUDA_HOST_DEVICE_FOR_4D(bx, ncomp, i, j, k, dir,
+                AMREX_HOST_DEVICE_FOR_4D(bx, ncomp, i, j, k, dir,
                 {
                     if (flag_fab(i,j,k).isCovered())
                     {
@@ -478,7 +476,7 @@ void incflo::ComputeVelocitySlopes(int lev, MultiFab& Sborder)
             const auto&  klo_ifab  = bc_klo[lev]->array();
             const auto&  khi_ifab  = bc_khi[lev]->array();
 
-            AMREX_CUDA_HOST_DEVICE_FOR_4D(bx, ncomp, i, j, k, dir,
+            AMREX_HOST_DEVICE_FOR_4D(bx, ncomp, i, j, k, dir,
             {
                 if ( (i == domain.smallEnd(0)) && !flag_fab(i,j,k).isCovered() && ilo_ifab(i-1,j,k,0) == 20)
                 {
