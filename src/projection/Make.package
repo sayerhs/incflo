@@ -1,4 +1,1 @@
-f90EXE_sources += projection_mod.f90
-
-CEXE_sources += PoissonEquation.cpp  
-CEXE_sources += projection.cpp  
+CEXE_sources += incflo_apply_nodal_projection.cpp

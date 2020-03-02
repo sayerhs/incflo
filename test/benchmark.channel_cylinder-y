@@ -1,7 +1,7 @@
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #            SIMULATION STOP            #
 #.......................................#
-stop_time               =   0.2         # Max (simulated) time to evolve
+stop_time               =   0.025       # Max (simulated) time to evolve
 max_step                =  -1           # Max number of time steps
 steady_state            =   0           # Steady-state solver? 
 
@@ -9,13 +9,12 @@ steady_state            =   0           # Steady-state solver?
 #         TIME STEP COMPUTATION         #
 #.......................................#
 incflo.fixed_dt         =   -1.0        # Use this constant dt if > 0
-incflo.cfl              =   0.9         # CFL factor
+incflo.cfl              =   0.45        # CFL factor
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #            INPUT AND OUTPUT           #
 #.......................................#
-amr.plot_int            =   -1          # Steps between plot files
-amr.plot_per            =   0.1         # Steps between plot files
+amr.plot_per_exact      =   0.01        # Steps between plot files
 amr.check_int           =   1000        # Steps between checkpoint files
 amr.restart             =   ""          # Checkpoint to restart from 
 
@@ -27,6 +26,10 @@ incflo.ro_0             =   1.          # Reference density
 
 incflo.fluid_model      =   "newtonian" # Fluid model (rheology)
 incflo.mu               =   0.001       # Dynamic viscosity coefficient
+
+incflo.ntrac            =   1           # Number of tracers
+incflo.advect_tracer    =   1           # Should we update them?
+incflo.mu_s             =   0.001       # Scalar diffusion coefficient
 
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #        ADAPTIVE MESH REFINEMENT       #
@@ -53,13 +56,14 @@ zhi.type                =   "nsw"
 zhi.velocity            =   0.  0.  0.
 ylo.type                =   "mi"
 ylo.velocity            =   0.  1.  0.
+ylo.tracer              =   1. 
 yhi.type                =   "po"
 yhi.pressure            =   0.0
 
 # Add cylinder 
 incflo.geometry         = "cylinder"
 cylinder.internal_flow  = false
-cylinder.radius         = 0.05
+cylinder.radius         = 0.05000001
 cylinder.direction      = 0
 cylinder.center         = 0.0  0.15  0.2 
 
@@ -75,8 +79,9 @@ incflo.ic_p             =   0.0         #
 #¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨¨#
 #              VERBOSITY                #
 #.......................................#
-incflo.verbose          =   2           # incflo_level
-mac.verbose             =   0           # MacProjector
-projection.mg_verbose   =   0           # Nodal projection
+incflo.verbose          =   1           # incflo itself
+mac_proj.verbose        =   1           # MAC Projector
+nodal_proj.verbose      =   1           # Nodal Projector
+diffusion.verbose       =   1           # Diffusion operator
 
 amr.plt_ccse_regtest    =   1

@@ -1,63 +1,49 @@
 #include <AMReX_Box.H>
-#include <AMReX_EBMultiFabUtil.H>
 
 #include <incflo.H>
-#include <derive_F.H>
-#include <projection_F.H>
+#include <AMReX_NodalProjector.H>
 
-void incflo::UpdateDerivedQuantities()
+using namespace amrex;
+
+void incflo::ComputeDivU(Real time_in)
 {
-    BL_PROFILE("incflo::UpdateDerivedQuantities()");
+#if 0
 
-    ComputeDivU(cur_time);
-    ComputeStrainrate();
-    ComputeViscosity();
-    ComputeVorticity();
-}
+    incflo_set_velocity_bcs(time_in, vel);
 
-void incflo::ComputeDivU(Real time)
-{
-    int extrap_dir_bcs = 0;
-    FillVelocityBC(time, extrap_dir_bcs);
-
-    // Define the operator in order to compute the multi-level divergence
-    //
-    //        (del dot b sigma grad)) phi
-    //
-    LPInfo info;
-    MLNodeLaplacian matrix(geom, grids, dmap, info, amrex::GetVecOfConstPtrs(ebfactory));
-
-    // Set domain BCs for Poisson's solver
-    // The domain BCs refer to level 0 only
-    int bc_lo[AMREX_SPACEDIM], bc_hi[AMREX_SPACEDIM];
+    int bc_lo[3], bc_hi[3];
     Box domain(geom[0].Domain());
 
-    set_ppe_bc(bc_lo, bc_hi,
-               domain.loVect(), domain.hiVect(),
-               &nghost,
-               bc_ilo[0]->dataPtr(), bc_ihi[0]->dataPtr(),
-               bc_jlo[0]->dataPtr(), bc_jhi[0]->dataPtr() 
-#if (AMREX_SPACEDIM == 2)
-               );
+    set_ppe_bcs(bc_lo, bc_hi,
+                domain.loVect(), domain.hiVect(),
+                &nghost,
+                bc_ilo[0]->dataPtr(), bc_ihi[0]->dataPtr(),
+                bc_jlo[0]->dataPtr(), bc_jhi[0]->dataPtr(),
+                bc_klo[0]->dataPtr(), bc_khi[0]->dataPtr());
 
-    matrix.setDomainBC({(LinOpBCType)bc_lo[0], (LinOpBCType)bc_lo[1],
-                       {(LinOpBCType)bc_hi[0], (LinOpBCType)bc_hi[1]);
-#elif (AMREX_SPACEDIM == 3)
-              ,bc_klo[0]->dataPtr(), bc_khi[0]->dataPtr());
+    ppe_lobc = {(LinOpBCType)bc_lo[0], (LinOpBCType)bc_lo[1], (LinOpBCType)bc_lo[2]};
+    ppe_hibc = {(LinOpBCType)bc_hi[0], (LinOpBCType)bc_hi[1], (LinOpBCType)bc_hi[2]};
 
-    matrix.setDomainBC({(LinOpBCType)bc_lo[0], (LinOpBCType)bc_lo[1], (LinOpBCType)bc_lo[2]},
-                       {(LinOpBCType)bc_hi[0], (LinOpBCType)bc_hi[1], (LinOpBCType)bc_hi[2]});
+    LPInfo lpinfo;
+
+    //
+    // This rebuilds integrals each time linop is created -- must find a better way
+    //
+
+#ifdef AMREX_USE_EB
+    MLNodeLaplacian linop(geom, grids, dmap, lpinfo, GetVecOfConstPtrs(ebfactory));
+#else
+    MLNodeLaplacian linop(geom, grids, dmap, lpinfo);
 #endif
-
-    matrix.compDivergence(GetVecOfPtrs(divu), GetVecOfPtrs(vel)); 
+    linop.setDomainBC(ppe_lobc,ppe_hibc);
+    linop.compDivergence(GetVecOfPtrs(divu),GetVecOfPtrs(vel));
+#endif
 }
 
-void incflo::ComputeStrainrate()
+void incflo::ComputeStrainrate(Real time_in)
 {
+#if 0
     BL_PROFILE("incflo::ComputeStrainrate");
-
-    // Declare components of velocity gradient
-    Real ux, uy, uz, vx, vy, vz, wx, wy, wz;
 
     for(int lev = 0; lev <= finest_level; lev++)
     {
@@ -67,102 +53,111 @@ void incflo::ComputeStrainrate()
         Real idz = 1.0 / geom[lev].CellSize()[2];
 
         // State with ghost cells
-        MultiFab Sborder(grids[lev], dmap[lev], vel[lev]->nComp(), nghost, 
-                         MFInfo(), *ebfactory[lev]);
-        FillPatchVel(lev, cur_time, Sborder, 0, Sborder.nComp());
-    
-        // Copy each FAB back from Sborder into the vel array, complete with filled ghost cells
-        MultiFab::Copy(*vel[lev], Sborder, 0, 0, vel[lev]->nComp(), vel[lev]->nGrow());
+#ifdef AMREX_USE_EB
+        MultiFab Sborder(grids[lev], dmap[lev], vel[lev]->nComp(), 2, MFInfo(), *ebfactory[lev]);
+#else
+        MultiFab Sborder(grids[lev], dmap[lev], vel[lev]->nComp(), 1, MFInfo());
+#endif
+        FillPatchVel(lev, time_in, Sborder);
+
+        strainrate[lev]->setVal(1.2345e200);
 
 #ifdef _OPENMP
 #pragma omp parallel if (Gpu::notInLaunchRegion())
 #endif
-        for(MFIter mfi(Sborder, TilingIfNotGPU()); mfi.isValid(); ++mfi)
+        for (MFIter mfi(Sborder, TilingIfNotGPU()); mfi.isValid(); ++mfi)
         {
             // Tilebox
             Box bx = mfi.tilebox();
 
+#ifdef AMREX_USE_EB
             // This is to check efficiently if this tile contains any eb stuff
             const EBFArrayBox& vel_fab = static_cast<EBFArrayBox const&>(Sborder[mfi]);
             const EBCellFlagFab& flags = vel_fab.getEBCellFlagFab();
+#endif
 
             // Cell-centered velocity
-            const auto& ccvel_fab = vel[lev]->array(mfi);
+            const auto& ccvel_fab = Sborder.array(mfi);
 
-            // Cell-centred strain-rate magnitude
+            // Cell-centered strain-rate magnitude
             const auto& sr_fab = strainrate[lev]->array(mfi);
 
-            if (flags.getType(amrex::grow(bx, 0)) == FabType::covered)
-            {
-                (*strainrate[lev])[mfi].setVal(1.2345e200, bx);
-            }
-            else if(flags.getType(amrex::grow(bx, 1)) == FabType::regular)
+#ifdef AMREX_USE_EB
+            if (flags.getType(amrex::grow(bx, 1)) == FabType::regular)
+#endif
             {
                 // No cut cells in tile + 1-cell witdh halo -> use non-eb routine
-                AMREX_HOST_DEVICE_FOR_3D(bx, i, j, k,
+                amrex::ParallelFor(bx,
+                  [idx,idy,idz,sr_fab,ccvel_fab] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
                 {
-                    ux = 0.5 * (ccvel_fab(i+1,j,k,0) - ccvel_fab(i-1,j,k,0)) * idx;
-                    vx = 0.5 * (ccvel_fab(i+1,j,k,1) - ccvel_fab(i-1,j,k,1)) * idx;
-                    wx = 0.5 * (ccvel_fab(i+1,j,k,2) - ccvel_fab(i-1,j,k,2)) * idx;
+                    Real ux = 0.5 * (ccvel_fab(i+1,j,k,0) - ccvel_fab(i-1,j,k,0)) * idx;
+                    Real vx = 0.5 * (ccvel_fab(i+1,j,k,1) - ccvel_fab(i-1,j,k,1)) * idx;
+                    Real wx = 0.5 * (ccvel_fab(i+1,j,k,2) - ccvel_fab(i-1,j,k,2)) * idx;
 
-                    uy = 0.5 * (ccvel_fab(i,j+1,k,0) - ccvel_fab(i,j-1,k,0)) * idy;
-                    vy = 0.5 * (ccvel_fab(i,j+1,k,1) - ccvel_fab(i,j-1,k,1)) * idy;
-                    wy = 0.5 * (ccvel_fab(i,j+1,k,2) - ccvel_fab(i,j-1,k,2)) * idy;
+                    Real uy = 0.5 * (ccvel_fab(i,j+1,k,0) - ccvel_fab(i,j-1,k,0)) * idy;
+                    Real vy = 0.5 * (ccvel_fab(i,j+1,k,1) - ccvel_fab(i,j-1,k,1)) * idy;
+                    Real wy = 0.5 * (ccvel_fab(i,j+1,k,2) - ccvel_fab(i,j-1,k,2)) * idy;
 
-                    uz = 0.5 * (ccvel_fab(i,j,k+1,0) - ccvel_fab(i,j,k-1,0)) * idz;
-                    vz = 0.5 * (ccvel_fab(i,j,k+1,1) - ccvel_fab(i,j,k-1,1)) * idz;
-                    wz = 0.5 * (ccvel_fab(i,j,k+1,2) - ccvel_fab(i,j,k-1,2)) * idz;
+                    Real uz = 0.5 * (ccvel_fab(i,j,k+1,0) - ccvel_fab(i,j,k-1,0)) * idz;
+                    Real vz = 0.5 * (ccvel_fab(i,j,k+1,1) - ccvel_fab(i,j,k-1,1)) * idz;
+                    Real wz = 0.5 * (ccvel_fab(i,j,k+1,2) - ccvel_fab(i,j,k-1,2)) * idz;
 
                     // Include the factor half here rather than in each of the above
-                    sr_fab(i,j,k) = sqrt(2.0 * pow(ux, 2) + 2.0 * pow(vy, 2) + 2.0 * pow(wz, 2) 
+                    sr_fab(i,j,k) = sqrt(2.0 * pow(ux, 2) + 2.0 * pow(vy, 2) + 2.0 * pow(wz, 2)
                             + pow(uy + vx, 2) + pow(vz + wy, 2) + pow(wx + uz, 2));
                 });
             }
-            else
+#ifdef AMREX_USE_EB
+            else if (flags.getType(amrex::grow(bx, 0)) != FabType::covered)
             {
-                // Cut cells present -> use EB routine! 
+                // Cut cells present -> use EB routine!
                 const auto& flag_fab = flags.array();
                 Real c0 = -1.5;
                 Real c1 = 2.0;
                 Real c2 = -0.5;
 
-                AMREX_HOST_DEVICE_FOR_3D(bx, i, j, k,
+                amrex::ParallelFor(bx,
+                  [idx,idy,idz,c0,c1,c2,sr_fab,flag_fab,ccvel_fab] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
                 {
                     if (flag_fab(i,j,k).isCovered())
                     {
                         // Don't compute strainrate in cut cells
                         sr_fab(i,j,k) = 1.2345e200;
                     }
-                    else 
+                    else
                     {
+                        Real ux(0); Real vx(0); Real wx(0);
+                        Real uy(0); Real vy(0); Real wy(0);
+                        Real uz(0); Real vz(0); Real wz(0);
+
                         if (flag_fab(i,j,k).isSingleValued())
                         {
                             // Need to check if there are covered cells in neighbours --
                             // -- if so, use one-sided difference computation (but still quadratic)
-                            if (flag_fab(i+1,j,k).isCovered())
+                            if (!flag_fab(i,j,k).isConnected( 1,0,0))
                             {
                                 // Covered cell to the right, go fish left
-                                ux = - (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i-1,j,k,0) 
-                                    + c2 * ccvel_fab(i-2,j,k,0)) * idx;
-                                vx = - (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i-1,j,k,1) 
-                                    + c2 * ccvel_fab(i-2,j,k,1)) * idx;
-                                wx = - (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i-1,j,k,2) 
-                                    + c2 * ccvel_fab(i-2,j,k,2)) * idx;
+                                ux = - (c0 * ccvel_fab(i  ,j,k,0)
+                                      + c1 * ccvel_fab(i-1,j,k,0)
+                                      + c2 * ccvel_fab(i-2,j,k,0)) * idx;
+                                vx = - (c0 * ccvel_fab(i  ,j,k,1)
+                                      + c1 * ccvel_fab(i-1,j,k,1)
+                                      + c2 * ccvel_fab(i-2,j,k,1)) * idx;
+                                wx = - (c0 * ccvel_fab(i  ,j,k,2)
+                                      + c1 * ccvel_fab(i-1,j,k,2)
+                                      + c2 * ccvel_fab(i-2,j,k,2)) * idx;
                             }
-                            else if (flag_fab(i-1,j,k).isCovered())
+                            else if (!flag_fab(i,j,k).isConnected(-1,0,0))
                             {
                                 // Covered cell to the left, go fish right
-                                ux = (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i+1,j,k,0) 
+                                ux = (c0 * ccvel_fab(i  ,j,k,0)
+                                    + c1 * ccvel_fab(i+1,j,k,0)
                                     + c2 * ccvel_fab(i+2,j,k,0)) * idx;
-                                vx = (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i+1,j,k,1) 
+                                vx = (c0 * ccvel_fab(i  ,j,k,1)
+                                    + c1 * ccvel_fab(i+1,j,k,1)
                                     + c2 * ccvel_fab(i+2,j,k,1)) * idx;
-                                wx = (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i+1,j,k,2) 
+                                wx = (c0 * ccvel_fab(i  ,j,k,2)
+                                    + c1 * ccvel_fab(i+1,j,k,2)
                                     + c2 * ccvel_fab(i+2,j,k,2)) * idx;
                             }
                             else
@@ -172,29 +167,29 @@ void incflo::ComputeStrainrate()
                                 vx = 0.5 * (ccvel_fab(i+1,j,k,1) - ccvel_fab(i-1,j,k,1)) * idx;
                                 wx = 0.5 * (ccvel_fab(i+1,j,k,2) - ccvel_fab(i-1,j,k,2)) * idx;
                             }
-                            // Do the same in y-direction 
-                            if (flag_fab(i,j+1,k).isCovered())
+                            // Do the same in y-direction
+                            if (!flag_fab(i,j,k).isConnected(0, 1,0))
                             {
-                                uy = - (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i,j-1,k,0) 
-                                    + c2 * ccvel_fab(i,j-2,k,0)) * idy;
-                                vy = - (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i,j-1,k,1) 
-                                    + c2 * ccvel_fab(i,j-2,k,1)) * idy;
-                                wy = - (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i,j-1,k,2) 
-                                    + c2 * ccvel_fab(i,j-2,k,2)) * idy;
+                                uy = - (c0 * ccvel_fab(i,j  ,k,0)
+                                      + c1 * ccvel_fab(i,j-1,k,0)
+                                      + c2 * ccvel_fab(i,j-2,k,0)) * idy;
+                                vy = - (c0 * ccvel_fab(i,j  ,k,1)
+                                      + c1 * ccvel_fab(i,j-1,k,1)
+                                      + c2 * ccvel_fab(i,j-2,k,1)) * idy;
+                                wy = - (c0 * ccvel_fab(i,j  ,k,2)
+                                      + c1 * ccvel_fab(i,j-1,k,2)
+                                      + c2 * ccvel_fab(i,j-2,k,2)) * idy;
                             }
-                            else if (flag_fab(i,j-1,k).isCovered())
+                            else if (!flag_fab(i,j,k).isConnected(0,-1,0))
                             {
-                                uy = (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i,j+1,k,0) 
+                                uy = (c0 * ccvel_fab(i,j  ,k,0)
+                                    + c1 * ccvel_fab(i,j+1,k,0)
                                     + c2 * ccvel_fab(i,j+2,k,0)) * idy;
-                                vy = (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i,j+1,k,1) 
+                                vy = (c0 * ccvel_fab(i,j  ,k,1)
+                                    + c1 * ccvel_fab(i,j+1,k,1)
                                     + c2 * ccvel_fab(i,j+2,k,1)) * idy;
-                                wy = (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i,j+1,k,2) 
+                                wy = (c0 * ccvel_fab(i,j  ,k,2)
+                                    + c1 * ccvel_fab(i,j+1,k,2)
                                     + c2 * ccvel_fab(i,j+2,k,2)) * idy;
                             }
                             else
@@ -204,29 +199,29 @@ void incflo::ComputeStrainrate()
                                 wy = 0.5 * (ccvel_fab(i,j+1,k,2) - ccvel_fab(i,j-1,k,2)) * idy;
                             }
 
-                            // Do the same in z-direction 
-                            if (flag_fab(i,j,k+1).isCovered())
+                            // Do the same in z-direction
+                            if (!flag_fab(i,j,k).isConnected(0,0, 1))
                             {
-                                uz = - (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i,j,k-1,0) 
-                                    + c2 * ccvel_fab(i,j,k-2,0)) * idz;
-                                vz = - (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i,j,k-1,1) 
-                                    + c2 * ccvel_fab(i,j,k-2,1)) * idz;
-                                wz = - (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i,j,k-1,2) 
-                                    + c2 * ccvel_fab(i,j,k-2,2)) * idz;
+                                uz = - (c0 * ccvel_fab(i,j,k  ,0)
+                                      + c1 * ccvel_fab(i,j,k-1,0)
+                                      + c2 * ccvel_fab(i,j,k-2,0)) * idz;
+                                vz = - (c0 * ccvel_fab(i,j,k  ,1)
+                                      + c1 * ccvel_fab(i,j,k-1,1)
+                                      + c2 * ccvel_fab(i,j,k-2,1)) * idz;
+                                wz = - (c0 * ccvel_fab(i,j,k  ,2)
+                                      + c1 * ccvel_fab(i,j,k-1,2)
+                                      + c2 * ccvel_fab(i,j,k-2,2)) * idz;
                             }
-                            else if (flag_fab(i,j,k-1).isCovered())
+                            else if (!flag_fab(i,j,k).isConnected(0,0,-1))
                             {
-                                uz = (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i,j,k+1,0) 
+                                uz = (c0 * ccvel_fab(i,j,k  ,0)
+                                    + c1 * ccvel_fab(i,j,k+1,0)
                                     + c2 * ccvel_fab(i,j,k+2,0)) * idz;
-                                vz = (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i,j,k+1,1) 
+                                vz = (c0 * ccvel_fab(i,j,k  ,1)
+                                    + c1 * ccvel_fab(i,j,k+1,1)
                                     + c2 * ccvel_fab(i,j,k+2,1)) * idz;
-                                wz = (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i,j,k+1,2) 
+                                wz = (c0 * ccvel_fab(i,j,k  ,2)
+                                    + c1 * ccvel_fab(i,j,k+1,2)
                                     + c2 * ccvel_fab(i,j,k+2,2)) * idz;
                             }
                             else
@@ -255,201 +250,224 @@ void incflo::ComputeStrainrate()
                     }
                 });
             }
-        }
-    }
+#endif
+        } // MFIter
+    } // lev
+#endif
 }
 
-void incflo::ComputeVorticity()
-{
-	BL_PROFILE("incflo::ComputeVorticity");
 
-    // Declare components of velocity gradient
-    Real uy, uz, vx, vz, wx, wy;
+Real incflo::ComputeKineticEnergy () const
+{
+#if 0
+    BL_PROFILE("incflo::ComputeKineticEnergy");
+
+    // integrated total Kinetic energy
+    Real KE = 0.0;
 
     for(int lev = 0; lev <= finest_level; lev++)
     {
-        Box domain(geom[lev].Domain());
-        Real idx = 1.0 / geom[lev].CellSize()[0];
-        Real idy = 1.0 / geom[lev].CellSize()[1];
-        Real idz = 1.0 / geom[lev].CellSize()[2];
+        Real cell_vol = geom[lev].CellSize()[0]*geom[lev].CellSize()[1]*geom[lev].CellSize()[2];
 
-        // State with ghost cells
-        MultiFab Sborder(grids[lev], dmap[lev], vel[lev]->nComp(), nghost, 
-                         MFInfo(), *ebfactory[lev]);
-        FillPatchVel(lev, cur_time, Sborder, 0, Sborder.nComp());
-    
-        // Copy each FAB back from Sborder into the vel array, complete with filled ghost cells
-        MultiFab::Copy (*vel[lev], Sborder, 0, 0, vel[lev]->nComp(), vel[lev]->nGrow());
+        KE += amrex::ReduceSum(*density[lev],*vel[lev],*level_mask[lev],0,
+        [=] AMREX_GPU_HOST_DEVICE (Box const& bx,
+                                   Array4<Real const> const& den_arr,
+                                   Array4<Real const> const& vel_arr,
+                                   Array4<int const>  const& mask_arr) -> Real
+        {
+            Real KE_Fab = 0.0;
+
+            amrex::Loop(bx, [=,&KE_Fab] (int i, int j, int k) noexcept
+            {
+                KE_Fab += cell_vol*mask_arr(i,j,k)*den_arr(i,j,k)*( vel_arr(i,j,k,0)*vel_arr(i,j,k,0)
+                                                                   +vel_arr(i,j,k,1)*vel_arr(i,j,k,1)
+                                                                   +vel_arr(i,j,k,2)*vel_arr(i,j,k,2));
+
+            });
+            return KE_Fab;
+
+        });
+    }
+
+    // total volume of grid on level 0
+    Real total_vol = geom[0].ProbDomain().volume();
+
+    KE *= 0.5/total_vol/ro_0;
+
+    ParallelDescriptor::ReduceRealSum(KE);
+
+    return KE;
+
+#endif
+    return 0;
+}
+
+void incflo::ComputeVorticity (int lev, Real t, MultiFab& vort, MultiFab const& vel)
+{
+    BL_PROFILE("incflo::ComputeVorticity");
+
+    const Real idx = Geom(lev).InvCellSize(0);
+    const Real idy = Geom(lev).InvCellSize(1);
+    const Real idz = Geom(lev).InvCellSize(2);
+
+#ifdef AMREX_USE_EB
+    const auto& fact = EBFactory(lev);
+    const auto& flags_mf = fact.getMultiEBCellFlagFab();
+#endif
 
 #ifdef _OPENMP
 #pragma omp parallel if (Gpu::notInLaunchRegion())
 #endif
-        for(MFIter mfi(Sborder, TilingIfNotGPU()); mfi.isValid(); ++mfi)
+    for(MFIter mfi(vel, TilingIfNotGPU()); mfi.isValid(); ++mfi)
+    {
+        Box bx = mfi.tilebox();
+        Array4<Real const> const& ccvel_fab = vel.const_array(mfi);
+        Array4<Real> const& vort_fab = vort.array(mfi);
+
+#ifdef AMREX_USE_EB
+        const EBCellFlagFab& flags = flags_mf[mfi];
+        auto typ = flags.getType(bx);
+        if (typ == FabType::covered)
         {
-            // Tilebox
-            Box bx = mfi.tilebox();
-
-            // This is to check efficiently if this tile contains any eb stuff
-            const EBFArrayBox& vel_fab = static_cast<EBFArrayBox const&>(Sborder[mfi]);
-            const EBCellFlagFab& flags = vel_fab.getEBCellFlagFab();
-
-            // Cell-centered velocity
-            const auto& ccvel_fab = vel[lev]->array(mfi);
-
-            // Cell-centred strain-rate magnitude
-            const auto& vort_fab = vort[lev]->array(mfi);
-
-            if (flags.getType(amrex::grow(bx, 0)) == FabType::covered)
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
             {
-                (*vort[lev])[mfi].setVal(1.2345e200, bx);
-            }
-            else if(flags.getType(amrex::grow(bx, 1)) == FabType::regular)
+                vort_fab(i,j,k) = 0.0;
+            });
+        }
+        else if (typ == FabType::singlevalued)
+        {
+            const auto& flag_fab = flags.const_array();
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
             {
-                // No cut cells in tile + 1-cell witdh halo -> use non-eb routine
-                AMREX_HOST_DEVICE_FOR_3D(bx, i, j, k,
+                constexpr Real c0 = -1.5;
+                constexpr Real c1 = 2.0;
+                constexpr Real c2 = -0.5;
+
+                if (flag_fab(i,j,k).isCovered())
                 {
-                    vx = 0.5 * (ccvel_fab(i+1,j,k,1) - ccvel_fab(i-1,j,k,1)) * idx;
-                    wx = 0.5 * (ccvel_fab(i+1,j,k,2) - ccvel_fab(i-1,j,k,2)) * idx;
-
-                    uy = 0.5 * (ccvel_fab(i,j+1,k,0) - ccvel_fab(i,j-1,k,0)) * idy;
-                    wy = 0.5 * (ccvel_fab(i,j+1,k,2) - ccvel_fab(i,j-1,k,2)) * idy;
-
-                    uz = 0.5 * (ccvel_fab(i,j,k+1,0) - ccvel_fab(i,j,k-1,0)) * idz;
-                    vz = 0.5 * (ccvel_fab(i,j,k+1,1) - ccvel_fab(i,j,k-1,1)) * idz;
-
-                    vort_fab(i,j,k) = sqrt( pow(wy - vz, 2) + pow(uz - wx, 2) + pow(vx - uy, 2));
-                });
-            }
-            else
-            {
-                // Cut cells present -> use EB routine! 
-                const auto& flag_fab = flags.array();
-                Real c0 = -1.5;
-                Real c1 = 2.0;
-                Real c2 = -0.5;
-
-                AMREX_HOST_DEVICE_FOR_3D(bx, i, j, k,
+                    vort_fab(i,j,k) = 0.0;
+                }
+                else
                 {
-                    if (flag_fab(i,j,k).isCovered())
+                    Real vx, wx, uy, wy, uz, vz;
+                    // Need to check if there are covered cells in neighbours --
+                    // -- if so, use one-sided difference computation (but still quadratic)
+                    if (!flag_fab(i,j,k).isConnected( 1,0,0))
                     {
-                        // Don't compute strainrate in cut cells
-                        vort_fab(i,j,k) = 1.2345e200;
+                        // Covered cell to the right, go fish left
+                        vx = - (c0 * ccvel_fab(i  ,j,k,1)
+                              + c1 * ccvel_fab(i-1,j,k,1)
+                              + c2 * ccvel_fab(i-2,j,k,1)) * idx;
+                        wx = - (c0 * ccvel_fab(i  ,j,k,2)
+                              + c1 * ccvel_fab(i-1,j,k,2)
+                              + c2 * ccvel_fab(i-2,j,k,2)) * idx;
                     }
-                    else 
+                    else if (!flag_fab(i,j,k).isConnected(-1,0,0))
                     {
-                        if (flag_fab(i,j,k).isSingleValued())
-                        {
-                            // Need to check if there are covered cells in neighbours --
-                            // -- if so, use one-sided difference computation (but still quadratic)
-                            if (flag_fab(i+1,j,k).isCovered())
-                            {
-                                // Covered cell to the right, go fish left
-                                vx = - (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i-1,j,k,1) 
-                                    + c2 * ccvel_fab(i-2,j,k,1)) * idx;
-                                wx = - (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i-1,j,k,2) 
-                                    + c2 * ccvel_fab(i-2,j,k,2)) * idx;
-                            }
-                            else if (flag_fab(i-1,j,k).isCovered())
-                            {
-                                // Covered cell to the left, go fish right
-                                vx = (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i+1,j,k,1) 
-                                    + c2 * ccvel_fab(i+2,j,k,1)) * idx;
-                                wx = (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i+1,j,k,2) 
-                                    + c2 * ccvel_fab(i+2,j,k,2)) * idx;
-                            }
-                            else
-                            {
-                                // No covered cells right or left, use standard stencil
-                                vx = 0.5 * (ccvel_fab(i+1,j,k,1) - ccvel_fab(i-1,j,k,1)) * idx;
-                                wx = 0.5 * (ccvel_fab(i+1,j,k,2) - ccvel_fab(i-1,j,k,2)) * idx;
-                            }
-                            // Do the same in y-direction 
-                            if (flag_fab(i,j+1,k).isCovered())
-                            {
-                                uy = - (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i,j-1,k,0) 
-                                    + c2 * ccvel_fab(i,j-2,k,0)) * idy;
-                                wy = - (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i,j-1,k,2) 
-                                    + c2 * ccvel_fab(i,j-2,k,2)) * idy;
-                            }
-                            else if (flag_fab(i,j-1,k).isCovered())
-                            {
-                                uy = (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i,j+1,k,0) 
-                                    + c2 * ccvel_fab(i,j+2,k,0)) * idy;
-                                wy = (c0 * ccvel_fab(i,j,k,2) 
-                                    + c1 * ccvel_fab(i,j+1,k,2) 
-                                    + c2 * ccvel_fab(i,j+2,k,2)) * idy;
-                            }
-                            else
-                            {
-                                uy = 0.5 * (ccvel_fab(i,j+1,k,0) - ccvel_fab(i,j-1,k,0)) * idy;
-                                wy = 0.5 * (ccvel_fab(i,j+1,k,2) - ccvel_fab(i,j-1,k,2)) * idy;
-                            }
-
-                            // Do the same in z-direction 
-                            if (flag_fab(i,j,k+1).isCovered())
-                            {
-                                uz = - (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i,j,k-1,0) 
-                                    + c2 * ccvel_fab(i,j,k-2,0)) * idz;
-                                vz = - (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i,j,k-1,1) 
-                                    + c2 * ccvel_fab(i,j,k-2,1)) * idz;
-                            }
-                            else if (flag_fab(i,j,k-1).isCovered())
-                            {
-                                uz = (c0 * ccvel_fab(i,j,k,0) 
-                                    + c1 * ccvel_fab(i,j,k+1,0) 
-                                    + c2 * ccvel_fab(i,j,k+2,0)) * idz;
-                                vz = (c0 * ccvel_fab(i,j,k,1) 
-                                    + c1 * ccvel_fab(i,j,k+1,1) 
-                                    + c2 * ccvel_fab(i,j,k+2,1)) * idz;
-                            }
-                            else
-                            {
-                                uz = 0.5 * (ccvel_fab(i,j,k+1,0) - ccvel_fab(i,j,k-1,0)) * idz;
-                                vz = 0.5 * (ccvel_fab(i,j,k+1,1) - ccvel_fab(i,j,k-1,1)) * idz;
-                            }
-                        }
-                        else
-                        {
-                            vx = 0.5 * (ccvel_fab(i+1,j,k,1) - ccvel_fab(i-1,j,k,1)) * idx;
-                            wx = 0.5 * (ccvel_fab(i+1,j,k,2) - ccvel_fab(i-1,j,k,2)) * idx;
-
-                            uy = 0.5 * (ccvel_fab(i,j+1,k,0) - ccvel_fab(i,j-1,k,0)) * idy;
-                            wy = 0.5 * (ccvel_fab(i,j+1,k,2) - ccvel_fab(i,j-1,k,2)) * idy;
-
-                            uz = 0.5 * (ccvel_fab(i,j,k+1,0) - ccvel_fab(i,j,k-1,0)) * idz;
-                            vz = 0.5 * (ccvel_fab(i,j,k+1,1) - ccvel_fab(i,j,k-1,1)) * idz;
-                        }
-                        vort_fab(i,j,k) = sqrt(pow(wy-vz,2) + pow(uz-wx,2) + pow(vx-uy,2));
+                        // Covered cell to the left, go fish right
+                        vx = (c0 * ccvel_fab(i  ,j,k,1)
+                            + c1 * ccvel_fab(i+1,j,k,1)
+                            + c2 * ccvel_fab(i+2,j,k,1)) * idx;
+                        wx = (c0 * ccvel_fab(i  ,j,k,2)
+                            + c1 * ccvel_fab(i+1,j,k,2)
+                            + c2 * ccvel_fab(i+2,j,k,2)) * idx;
                     }
-                });
-            } // Cut cells
-        } // MFIter
-    } // Loop over levels
+                    else
+                    {
+                        // No covered cells right or left, use standard stencil
+                        vx = 0.5 * (ccvel_fab(i+1,j,k,1) - ccvel_fab(i-1,j,k,1)) * idx;
+                        wx = 0.5 * (ccvel_fab(i+1,j,k,2) - ccvel_fab(i-1,j,k,2)) * idx;
+                    }
+                    // Do the same in y-direction
+                    if (!flag_fab(i,j,k).isConnected(0, 1,0))
+                    {
+                        uy = - (c0 * ccvel_fab(i,j  ,k,0)
+                              + c1 * ccvel_fab(i,j-1,k,0)
+                              + c2 * ccvel_fab(i,j-2,k,0)) * idy;
+                        wy = - (c0 * ccvel_fab(i,j  ,k,2)
+                              + c1 * ccvel_fab(i,j-1,k,2)
+                              + c2 * ccvel_fab(i,j-2,k,2)) * idy;
+                    }
+                    else if (!flag_fab(i,j,k).isConnected(0,-1,0))
+                    {
+                        uy = (c0 * ccvel_fab(i,j  ,k,0)
+                            + c1 * ccvel_fab(i,j+1,k,0)
+                            + c2 * ccvel_fab(i,j+2,k,0)) * idy;
+                        wy = (c0 * ccvel_fab(i,j  ,k,2)
+                            + c1 * ccvel_fab(i,j+1,k,2)
+                            + c2 * ccvel_fab(i,j+2,k,2)) * idy;
+                    }
+                    else
+                    {
+                        uy = 0.5 * (ccvel_fab(i,j+1,k,0) - ccvel_fab(i,j-1,k,0)) * idy;
+                        wy = 0.5 * (ccvel_fab(i,j+1,k,2) - ccvel_fab(i,j-1,k,2)) * idy;
+                    }
+                    // Do the same in z-direction
+                    if (!flag_fab(i,j,k).isConnected(0,0, 1))
+                    {
+                        uz = - (c0 * ccvel_fab(i,j,k  ,0)
+                              + c1 * ccvel_fab(i,j,k-1,0)
+                              + c2 * ccvel_fab(i,j,k-2,0)) * idz;
+                        vz = - (c0 * ccvel_fab(i,j,k  ,1)
+                              + c1 * ccvel_fab(i,j,k-1,1)
+                              + c2 * ccvel_fab(i,j,k-2,1)) * idz;
+                    }
+                    else if (!flag_fab(i,j,k).isConnected(0,0,-1))
+                    {
+                        uz = (c0 * ccvel_fab(i,j,k  ,0)
+                            + c1 * ccvel_fab(i,j,k+1,0)
+                            + c2 * ccvel_fab(i,j,k+2,0)) * idz;
+                        vz = (c0 * ccvel_fab(i,j,k  ,1)
+                            + c1 * ccvel_fab(i,j,k+1,1)
+                            + c2 * ccvel_fab(i,j,k+2,1)) * idz;
+                    }
+                    else
+                    {
+                        uz = 0.5 * (ccvel_fab(i,j,k+1,0) - ccvel_fab(i,j,k-1,0)) * idz;
+                        vz = 0.5 * (ccvel_fab(i,j,k+1,1) - ccvel_fab(i,j,k-1,1)) * idz;
+                    }
+                    vort_fab(i,j,k) = std::sqrt((wy-vz)*(wy-vz) + (uz-wx)*(uz-wx) + (vx-uy)*(vx-uy));
+                }
+            });
+        }
+        else
+#endif
+        {
+            amrex::ParallelFor(bx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept
+            {
+                Real vx = 0.5 * (ccvel_fab(i+1,j,k,1) - ccvel_fab(i-1,j,k,1)) * idx;
+                Real wx = 0.5 * (ccvel_fab(i+1,j,k,2) - ccvel_fab(i-1,j,k,2)) * idx;
+
+                Real uy = 0.5 * (ccvel_fab(i,j+1,k,0) - ccvel_fab(i,j-1,k,0)) * idy;
+                Real wy = 0.5 * (ccvel_fab(i,j+1,k,2) - ccvel_fab(i,j-1,k,2)) * idy;
+
+                Real uz = 0.5 * (ccvel_fab(i,j,k+1,0) - ccvel_fab(i,j,k-1,0)) * idz;
+                Real vz = 0.5 * (ccvel_fab(i,j,k+1,1) - ccvel_fab(i,j,k-1,1)) * idz;
+
+                vort_fab(i,j,k) = std::sqrt((wy-vz)*(wy-vz) + (uz-wx)*(uz-wx) + (vx-uy)*(vx-uy));
+            });
+        }
+    }
 }
 
 void incflo::ComputeDrag()
 {
+#if 0
 	BL_PROFILE("incflo::ComputeDrag");
 
     // Coefficients for one-sided difference estimation
     Real c0 = -1.5;
-    Real c1 = 2.0; 
+    Real c1 = 2.0;
     Real c2 = -0.5;
 
     for(int lev = 0; lev <= finest_level; lev++)
     {
         Box domain(geom[lev].Domain());
         Real dx = geom[lev].CellSize()[0];
-        
+
+        drag[lev]->setVal(0.0);
+
+#ifdef AMREX_USE_EB
         // Get EB geometric info
         const amrex::MultiCutFab* bndryarea;
         const amrex::MultiCutFab* bndrynorm;
@@ -476,13 +494,13 @@ void incflo::ComputeDrag()
                 const auto& p_arr = p[lev]->array(mfi);
                 const auto& bndryarea_arr = bndryarea->array(mfi);
                 const auto& bndrynorm_arr = bndrynorm->array(mfi);
-                const auto& flag_arr = flags.array();
+                const auto& flag_fab = flags.array();
 
                 for(int i = bx.smallEnd(0); i <= bx.bigEnd(0); i++)
                 for(int j = bx.smallEnd(1); j <= bx.bigEnd(1); j++)
                 for(int k = bx.smallEnd(2); k <= bx.bigEnd(2); k++)
                 {
-                    if(flag_arr(i,j,k).isSingleValued())
+                    if(flag_fab(i,j,k).isSingleValued())
                     {
                         Real area = bndryarea_arr(i,j,k);
                         Real nx = bndrynorm_arr(i,j,k,0);
@@ -491,13 +509,13 @@ void incflo::ComputeDrag()
 
                         Real uz, vz, wx, wy, wz;
 
-                        if(flag_arr(i,j,k+1).isCovered())
+                        if (!flag_fab(i,j,k).isConnected(0,0, 1))
                         {
                             uz = - (c0 * vel_arr(i,j,k,0) + c1 * vel_arr(i,j,k-1,0) + c2 * vel_arr(i,j,k-2,0)) / dx;
                             vz = - (c0 * vel_arr(i,j,k,1) + c1 * vel_arr(i,j,k-1,1) + c2 * vel_arr(i,j,k-2,1)) / dx;
                             wz = - (c0 * vel_arr(i,j,k,2) + c1 * vel_arr(i,j,k-1,2) + c2 * vel_arr(i,j,k-2,2)) / dx;
                         }
-                        else if(flag_arr(i,j,k-1).isCovered())
+                        else if (!flag_fab(i,j,k).isConnected(0,0,-1))
                         {
                             uz = (c0 * vel_arr(i,j,k,0) + c1 * vel_arr(i,j,k+1,0) + c2 * vel_arr(i,j,k+2,0)) / dx;
                             vz = (c0 * vel_arr(i,j,k,1) + c1 * vel_arr(i,j,k+1,1) + c2 * vel_arr(i,j,k+2,1)) / dx;
@@ -510,11 +528,11 @@ void incflo::ComputeDrag()
                             wz = 0.5 * (vel_arr(i,j,k+1,2) - vel_arr(i,j,k-1,2)) / dx;
                         }
 
-                        if(flag_arr(i,j+1,k).isCovered())
+                        if (!flag_fab(i,j,k).isConnected(0, 1,0))
                         {
                             wy = - (c0 * vel_arr(i,j,k,2) + c1 * vel_arr(i,j-1,k,2) + c2 * vel_arr(i,j-2,k,2)) / dx;
                         }
-                        else if(flag_arr(i,j-1,k).isCovered())
+                        else if (!flag_fab(i,j,k).isConnected(0,-1,0))
                         {
                             wy = (c0 * vel_arr(i,j,k,2) + c1 * vel_arr(i,j+1,k,2) + c2 * vel_arr(i,j+2,k,2)) / dx;
                         }
@@ -523,11 +541,11 @@ void incflo::ComputeDrag()
                             wy = 0.5 * (vel_arr(i,j+1,k,2) - vel_arr(i,j-1,k,2)) / dx;
                         }
 
-                        if(flag_arr(i+1,j,k).isCovered())
+                        if (!flag_fab(i,j,k).isConnected( 1,0,0))
                         {
                             wx = - (c0 * vel_arr(i,j,k,2) + c1 * vel_arr(i-1,j,k,2) + c2 * vel_arr(i-2,j,k,2)) / dx;
                         }
-                        else if(flag_arr(i-1,j,k).isCovered())
+                        else if (!flag_fab(i,j,k).isConnected(-1,0,0))
                         {
                             wx = (c0 * vel_arr(i,j,k,2) + c1 * vel_arr(i+1,j,k,2) + c2 * vel_arr(i+2,j,k,2)) / dx;
                         }
@@ -539,7 +557,7 @@ void incflo::ComputeDrag()
                         Real p_contrib = p_arr(i,j,k) * nz;
                         Real tau_contrib = - eta_arr(i,j,k) * ( (uz + wx) * nx + (vz + wy) * ny + (wz + wz) * nz );
 
-                        // TODO: Get values on EB centroid, 
+                        // TODO: Get values on EB centroid,
                         //       not the default CC and nodal values
                         drag_arr(i,j,k) = (p_contrib + tau_contrib) * area * dx * dx;
                     }
@@ -549,10 +567,8 @@ void incflo::ComputeDrag()
                     }
                 }
             }
-            else
-            {
-                (*drag[lev])[mfi].setVal(0.0, bx);
-            }
-        }
+        } // MFIter
+#endif
     }
+#endif
 }
