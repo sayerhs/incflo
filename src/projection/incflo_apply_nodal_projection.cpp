@@ -130,6 +130,15 @@ void incflo::ApplyProjection (Vector<MultiFab const*> density,
         }
     }
 
+    Vector<amrex::MultiFab> phi_in(finest_level + 1);
+    for (int lev=0; lev <= finest_level; ++lev) {
+        auto tmp = grids[lev];
+        const auto& ba_nd = tmp.surroundingNodes();
+        phi_in[lev].define(ba_nd, dmap[lev], 1, 1, MFInfo(), *m_factory[lev]);
+        phi_in[lev].setVal(0.0);
+    }
+    auto phi_in_vec = GetVecOfPtrs(phi_in);
+
     // Perform projection
     std::unique_ptr<NodalProjector> nodal_projector;
 
@@ -150,7 +159,7 @@ void incflo::ApplyProjection (Vector<MultiFab const*> density,
     nodal_projector.reset(new NodalProjector(vel, GetVecOfConstPtrs(sigma),
                                              Geom(0,finest_level), info));
     nodal_projector->setDomainBC(bclo, bchi);
-    nodal_projector->project(m_nodal_mg_rtol, m_nodal_mg_atol);
+    nodal_projector->project(phi_in_vec, m_nodal_mg_rtol, m_nodal_mg_atol);
 
     // Define "vel" to be U^{n+1} rather than (U^{n+1}-U^n)
     if (proj_for_small_dt || incremental)
