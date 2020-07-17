@@ -6,8 +6,13 @@ void incflo::set_background_pressure ()
 {
     m_p000 = m_ic_p;
 
-    if (m_probtype == 11 || m_probtype == 111 || m_probtype == 112 || m_probtype == 113) {
+    if (m_probtype == 11 || m_probtype == 111 || m_probtype == 112 || m_probtype == 113
+        || m_probtype == 118) {
         m_use_boussinesq = true;
+
+        // Allow override from input file for testing purposes
+        amrex::ParmParse pp("incflo");
+        pp.query("use_boussinesq", m_use_boussinesq);
     } else {
         const auto problo = geom[0].ProbLoArray();
         const auto probhi = geom[0].ProbHiArray();

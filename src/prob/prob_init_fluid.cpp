@@ -74,7 +74,8 @@ void incflo::prob_init_fluid (int lev)
                         ld.tracer.array(mfi),
                         domain, dx, problo, probhi);
         }
-        else if (111 == m_probtype || 112 == m_probtype || 113 == m_probtype)
+        else if (111 == m_probtype || 112 == m_probtype || 113 == m_probtype
+                 || 118 == m_probtype)
         {
             init_boussinesq_bubble(vbx, gbx,
                                    ld.p.array(mfi),
@@ -343,6 +344,16 @@ void incflo::init_boussinesq_bubble (Box const& vbx, Box const& gbx,
             else
                 tracer(i,j,k,0) = 0.01;
         });
+    }
+    else if (118 == m_probtype) {
+        amrex::ParallelFor(
+            vbx, [=] AMREX_GPU_DEVICE (int i, int j, int k) noexcept {
+                amrex::Real z = (k + 0.5) * dx[2];
+                vel(i, j, k, 0) = 8.0;
+                vel(i, j, k, 1) = 0.0;
+                vel(i, j, k, 2) = 0.0;
+                tracer(i, j, k, 0) = 300.0 + 0.01 * z;
+            });
     }
 #endif
 }

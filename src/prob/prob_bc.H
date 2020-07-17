@@ -197,6 +197,7 @@ struct IncfloTracFill
 #endif
 
         const Box& domain_box = geom.Domain();
+        const amrex::Real deltaz = geom.CellSize(2);
 
         for (int n = 0; n < ntrac; ++n)
         {
@@ -204,11 +205,17 @@ struct IncfloTracFill
 
             if (bc.lo(0) == BCType::ext_dir and i < domain_box.smallEnd(0))
             {
-                tracer(i,j,k,n) = bcv[Orientation(Direction::x,Orientation::low)][n];
+                if ((118 == probtype) && (n == 0)) {
+                    amrex::Real z = (k + 0.5) * deltaz;
+                    tracer(i, j, k, n) = 300.0 + 0.01 * z;
+                }
+                else {
+                    tracer(i,j,k,n) = bcv[Orientation(Direction::x,Orientation::high)][n];
+                }
             }
             else if (bc.hi(0) == BCType::ext_dir and i > domain_box.bigEnd(0))
             {
-                tracer(i,j,k,n) = bcv[Orientation(Direction::x,Orientation::high)][n];
+                tracer(i,j,k,n) = bcv[Orientation(Direction::x,Orientation::low)][n];
             }
 
             if (bc.lo(1) == BCType::ext_dir and j < domain_box.smallEnd(1))

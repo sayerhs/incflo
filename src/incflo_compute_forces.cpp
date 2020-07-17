@@ -75,7 +75,8 @@ void incflo::compute_vel_forces_on_level (int lev,
                     int n = 0; // Potential temperature
 
                     Real rhoinv = 1.0/rho(i,j,k);
-                    Real ft = 0.5 * (tra_o(i,j,k,n) + tra_n(i,j,k,n));
+                    Real tavg = 0.5 * (tra_o(i,j,k,n) + tra_n(i,j,k,n));
+                    Real ft = (1.0 - tavg / 300.0);
 
                     AMREX_D_TERM(vel_f(i,j,k,0) = -gradp(i,j,k,0)*rhoinv + l_gravity[0] * ft;,
                                  vel_f(i,j,k,1) = -gradp(i,j,k,1)*rhoinv + l_gravity[1] * ft;,
