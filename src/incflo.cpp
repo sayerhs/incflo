@@ -53,7 +53,7 @@ void incflo::InitData ()
         // with MakeNewLevelFromScratch.
         InitFromScratch(m_cur_time);
 
-        if (m_do_initial_proj) {
+        if (m_do_initial_proj && (m_probtype != 118)) {
             InitialProjection();
         }
         if (m_initial_iterations > 0) {

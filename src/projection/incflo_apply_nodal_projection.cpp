@@ -1,5 +1,6 @@
 #include <AMReX_BC_TYPES.H>
 #include <incflo.H>
+#include <OutFlowPressure.H>
 
 using namespace amrex;
 
@@ -138,6 +139,16 @@ void incflo::ApplyProjection (Vector<MultiFab const*> density,
         phi_in[lev].setVal(0.0);
     }
     auto phi_in_vec = GetVecOfPtrs(phi_in);
+
+    if (m_probtype == 118) {
+        amrex::Array<bool, AMREX_SPACEDIM*2> is_outflow{{
+                false, false, false, false, false, false
+            }};
+        is_outflow[Orientation(Direction::x, Orientation::high)] = true;
+
+        OutFlowPressure ofp(Geom(0), m_gravity[2], is_outflow);
+        ofp.computePressure(phi_in[0], m_leveldata[0]->tracer);
+    }
 
     // Perform projection
     std::unique_ptr<NodalProjector> nodal_projector;

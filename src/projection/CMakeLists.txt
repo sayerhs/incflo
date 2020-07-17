@@ -1,1 +1,4 @@
-target_sources(incflo PRIVATE incflo_apply_nodal_projection.cpp)
+target_sources(incflo PRIVATE 
+  incflo_apply_nodal_projection.cpp
+  OutFlowPressure.cpp
+  )
